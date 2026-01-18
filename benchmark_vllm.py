@@ -33,7 +33,7 @@ def run(prompt, max_tokens, num_requests, concurrency):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt", default="Write a haiku about AI.")
+    parser.add_argument("--prompt", default="Continue writing numbers: 1, 2, 3, 4, 5,")
     parser.add_argument("-t", type=int, default=32)
     parser.add_argument("-n", type=int, default=10)
     parser.add_argument("-c", type=int, default=1)
