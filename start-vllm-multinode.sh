@@ -15,6 +15,7 @@ WORKER_IP="192.168.100.11"
 ENV="-e NCCL_SOCKET_IFNAME=$OOB_IF -e GLOO_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
+# Note: VLLM_USE_RAY_COMPILED_DAG=0 doesn't work for multi-node - vLLM forces it to 1
 
 if [ "$DEBUG_NCCL" = "1" ]; then
   ENV="$ENV -e NCCL_DEBUG=INFO -e NCCL_DEBUG_SUBSYS=INIT,NET,IB"
@@ -55,11 +56,10 @@ echo "=== Starting vLLM server ==="
 VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code --enforce-eager"
 VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.75"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8 --limit-mm-per-prompt.video 0"
-VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"
+# --mm-encoder-tp-mode data disabled - hangs encoder profiling in multi-node
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
-ssh spark-2 "docker exec -d -e RAY_ADDRESS=$HEAD_IP:6379 -e VLLM_ATTENTION_BACKEND=TRITON_ATTN \\
-    -e VLLM_USE_RAY_COMPILED_DAG=0 vllm-head \\
+ssh spark-2 "docker exec -d -e RAY_ADDRESS=$HEAD_IP:6379 -e VLLM_ATTENTION_BACKEND=TRITON_ATTN vllm-head \\
     vllm serve $MODEL $VLLM_ARGS"
 
 echo "=== Done ==="

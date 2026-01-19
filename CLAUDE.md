@@ -264,14 +264,11 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **Root cause of ~1200% CPU:** 12× `worker.channel_` threads busy-polling Ray shared memory channels.
 
-**Fix:** Disable compiled DAG (add to vllm-head container):
-```bash
--e VLLM_USE_RAY_COMPILED_DAG=0
-```
+**Fix (single-node only):** Set `VLLM_USE_RAY_COMPILED_DAG=0` at container startup.
 
-**Tradeoff:** Benchmarks show ~2.5x HIGHER throughput with DAG disabled (polling overhead > latency benefit). Slightly higher IPC latency (~ms vs ~μs) but negligible vs GPU compute time (~10-50ms/token).
+**Multi-node limitation:** vLLM v1 **forces compiled DAG on** for multi-node TP. Setting `VLLM_USE_RAY_COMPILED_DAG=0` gets overwritten to `1`. The CPU overhead is unavoidable for multi-node setups.
 
-**Status:** Disabled in `start-vllm-multinode.sh` (Jan 2026).
+**Tradeoff:** Benchmarks show ~2.5x higher throughput with DAG disabled (single-node only).
 
 ## Model Cache (Jan 2026)
 
