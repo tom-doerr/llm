@@ -1,16 +1,25 @@
 #!/bin/bash
 # Start vLLM multi-node on spark-2 (head) + spark-3 (worker)
+# Usage: ./start-vllm-multinode.sh [--debug]
 set -e
+
+DEBUG_NCCL=${DEBUG_NCCL:-0}
+[[ "$1" == "--debug" ]] && DEBUG_NCCL=1
 
 MODEL="QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
 CONTAINER="nvcr.io/nvidia/vllm:25.11-py3"
-RDMA_IF="enp1s0f1np1"
+OOB_IF="enp1s0f1np1"  # Control plane interface
 HEAD_IP="192.168.100.10"
 WORKER_IP="192.168.100.11"
-
-ENV="-e NCCL_SOCKET_IFNAME=$RDMA_IF -e GLOO_SOCKET_IFNAME=$RDMA_IF"
-ENV="$ENV -e UCX_NET_DEVICES=$RDMA_IF -e RAY_memory_monitor_refresh_ms=0"
+# NCCL uses socket transport over RDMA interface (NCCL_NET=IB fails with RoCE on Spark)
+ENV="-e NCCL_SOCKET_IFNAME=$OOB_IF -e GLOO_SOCKET_IFNAME=$OOB_IF"
+ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
+
+if [ "$DEBUG_NCCL" = "1" ]; then
+  ENV="$ENV -e NCCL_DEBUG=INFO -e NCCL_DEBUG_SUBSYS=INIT,NET,IB"
+  echo "NCCL debug enabled"
+fi
 
 ENV_HEAD="$ENV -e VLLM_HOST_IP=$HEAD_IP"
 ENV_WORKER="$ENV -e VLLM_HOST_IP=$WORKER_IP"
@@ -48,7 +57,8 @@ VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.75"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8 --limit-mm-per-prompt.video 0"
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
-ssh spark-2 "docker exec -d -e RAY_ADDRESS=$HEAD_IP:6379 vllm-head \\
+ssh spark-2 "docker exec -d -e RAY_ADDRESS=$HEAD_IP:6379 -e VLLM_ATTENTION_BACKEND=TRITON_ATTN \\
+    -e VLLM_USE_RAY_COMPILED_DAG=0 vllm-head \\
     vllm serve $MODEL $VLLM_ARGS"
 
 echo "=== Done ==="

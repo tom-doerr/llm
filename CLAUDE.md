@@ -95,6 +95,8 @@ export NCCL_SOCKET_IFNAME=enp1s0f1np1
 export OMPI_MCA_btl_tcp_if_include=enp1s0f1np1
 ```
 
+**NCCL IB (Jan 2026): FAILS on Spark RoCE.** `NCCL_NET=IB` + `NCCL_IB_HCA` causes `ncclCommInitRank` error. Use socket-based NCCL.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -192,6 +194,8 @@ Container: `nvcr.io/nvidia/vllm:25.11-py3`
 
 **VERIFIED WORKING (Jan 2026):** ~3 min model load, ~5s TTFT
 
+**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM across spark-2/spark-3)
+
 Docs: https://build.nvidia.com/spark/vllm/stacked-sparks
 
 **CRITICAL env vars (both nodes):**
@@ -206,6 +210,11 @@ export RAY_memory_monitor_refresh_ms=0
 **cuDNN Fix (REQUIRED):** GB10 lacks cuDNN conv3d kernels for sm_121. Mount import hook:
 ```bash
 -v /home/tom/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro
+```
+
+**Attention Backend Fix (REQUIRED for VLM):** Vision encoder profiling hangs without this:
+```bash
+-e VLLM_ATTENTION_BACKEND=TRITON_ATTN
 ```
 
 **HF_HUB_OFFLINE=1** required when DNS is broken (common on Spark WiFi issues).
@@ -236,6 +245,34 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **Deps:** `pip install qwen-vl-utils==0.0.14` (required for Qwen-VL)
 
+### Head vs Worker Node Resource Usage (Jan 2026)
+
+**spark-2 (head)** uses more CPU/RAM than **spark-3 (worker)**:
+
+| Resource | spark-2 (head) | spark-3 (worker) |
+|----------|----------------|------------------|
+| CPU | ~1200% (EngineCore) + 134% (Ray) | ~246% (Ray worker) |
+| RAM | 118GB used, <1GB free | 109GB used, 10GB free |
+
+**Why head is heavier:** EngineCore (scheduling, KV mgmt), tokenization (CPU-only), vision preprocessing (image decode/resize before GPU), Ray GCS server.
+
+**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder (each GPU keeps full copy). Not useful for 2-node TP=2 (1 GPU/node).
+
+**Reduce CPU load:** Resize images client-side before API calls (<100KB).
+
+### Ray Compiled DAG CPU Overhead (Jan 2026)
+
+**Root cause of ~1200% CPU:** 12× `worker.channel_` threads busy-polling Ray shared memory channels.
+
+**Fix:** Disable compiled DAG (add to vllm-head container):
+```bash
+-e VLLM_USE_RAY_COMPILED_DAG=0
+```
+
+**Tradeoff:** Benchmarks show ~2.5x HIGHER throughput with DAG disabled (polling overhead > latency benefit). Slightly higher IPC latency (~ms vs ~μs) but negligible vs GPU compute time (~10-50ms/token).
+
+**Status:** Disabled in `start-vllm-multinode.sh` (Jan 2026).
+
 ## Model Cache (Jan 2026)
 
 **spark-2** (~700GB): AWQ Instruct/Thinking (116+117G), NVFP4 variants (127G each), BF16 Thinking (214G)
@@ -246,9 +283,9 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **Working (Jan 2026):** vLLM TP=2 with sitecustomize.py cuDNN disable + FP8 KV cache + HF_HUB_OFFLINE=1
 
-**Model load:** ~3 min (42 shards). **TTFT:** ~5s.
+**Model load:** ~3 min (42 shards) + ~5 min encoder profiling. **TTFT:** ~5s.
 
-**KV Cache:** 22.48 GiB, ~500K tokens, 122x max concurrency at 4K context
+**KV Cache:** 25.77 GiB per node, 256K max context, ~51GB total across TP=2
 
 ## Instruct vs Thinking Variants
 
