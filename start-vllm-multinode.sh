@@ -55,6 +55,7 @@ echo "=== Starting vLLM server ==="
 VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code --enforce-eager"
 VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.75"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8 --limit-mm-per-prompt.video 0"
+VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
 ssh spark-2 "docker exec -d -e RAY_ADDRESS=$HEAD_IP:6379 -e VLLM_ATTENTION_BACKEND=TRITON_ATTN \\

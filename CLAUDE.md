@@ -256,7 +256,7 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **Why head is heavier:** EngineCore (scheduling, KV mgmt), tokenization (CPU-only), vision preprocessing (image decode/resize before GPU), Ray GCS server.
 
-**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder (each GPU keeps full copy). Not useful for 2-node TP=2 (1 GPU/node).
+**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder (each GPU keeps full copy). Enabled in `start-vllm-multinode.sh`.
 
 **Reduce CPU load:** Resize images client-side before API calls (<100KB).
 
