@@ -1,31 +1,18 @@
 #!/bin/bash
 # Start vLLM multi-node on spark-2 (head) + spark-3 (worker)
-# Usage: ./start-vllm-multinode.sh [--debug] [--ib]
+# Usage: ./start-vllm-multinode.sh [--debug]
 set -e
 
 DEBUG_NCCL=${DEBUG_NCCL:-0}
-USE_IB=${USE_IB:-0}
 [[ "$1" == "--debug" ]] && DEBUG_NCCL=1
-[[ "$1" == "--ib" || "$2" == "--ib" ]] && USE_IB=1
 
 MODEL="QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
 CONTAINER="nvcr.io/nvidia/vllm:25.11-py3"
 OOB_IF="enp1s0f1np1"  # Control plane interface
 HEAD_IP="192.168.100.10"
 WORKER_IP="192.168.100.11"
-# RDMA device for IB mode
-RDMA_DEV="--device /dev/infiniband"
-
-if [ "$USE_IB" = "1" ]; then
-  echo "Using NCCL IB mode with dual interfaces"
-  # Disable GPUDirect RDMA (not supported on Spark), use host memory
-  ENV="-e NCCL_NET=IB -e NCCL_IB_HCA=rocep1s0f1,roceP2p1s0f1"
-  ENV="$ENV -e NCCL_NET_GDR_LEVEL=0 -e NCCL_IB_DISABLE_GDR=1"
-else
-  # Socket transport (single interface)
-  ENV="-e NCCL_SOCKET_IFNAME=$OOB_IF"
-fi
-ENV="$ENV -e GLOO_SOCKET_IFNAME=$OOB_IF"
+# Socket transport - NVIDIA official for GB10 (IB mode not supported, no GPUDirect)
+ENV="-e NCCL_SOCKET_IFNAME=$OOB_IF -e GLOO_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
 # Note: VLLM_USE_RAY_COMPILED_DAG=0 doesn't work for multi-node - vLLM forces it to 1
@@ -51,7 +38,7 @@ ssh spark-3 "docker rm -f vllm-worker 2>/dev/null || true"
 
 echo "=== Starting Ray head on spark-2 ==="
 ssh spark-2 "docker run -d --name vllm-head --gpus all --shm-size 16g \\
-    --network host --ipc host $RDMA_DEV $ENV_HEAD $VOLS $CONTAINER \\
+    --network host --ipc host $ENV_HEAD $VOLS $CONTAINER \\
     ray start --head --port=6379 --node-ip-address=$HEAD_IP --block"
 
 echo "Waiting for Ray head..."
@@ -59,7 +46,7 @@ sleep 10
 
 echo "=== Starting Ray worker on spark-3 ==="
 ssh spark-3 "docker run -d --name vllm-worker --gpus all --shm-size 16g \\
-    --network host --ipc host $RDMA_DEV $ENV_WORKER $VOLS $CONTAINER \\
+    --network host --ipc host $ENV_WORKER $VOLS $CONTAINER \\
     ray start --address=$HEAD_IP:6379 --node-ip-address=$WORKER_IP --block"
 
 echo "Waiting for worker to join..."

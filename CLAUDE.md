@@ -207,9 +207,9 @@ export UCX_NET_DEVICES=$MN_IF_NAME
 export RAY_memory_monitor_refresh_ms=0
 ```
 
-**Single interface used:** Peak TP=2 bandwidth ~9 Gbit/s. NCCL socket mode only uses ONE interface ([#278](https://github.com/NVIDIA/nccl/issues/278)). Dual interface would reduce latency (full-duplex) but requires IB mode.
+**Single interface is NVIDIA official:** [build.nvidia.com/spark/vllm/stacked-sparks](https://build.nvidia.com/spark/vllm/stacked-sparks) recommends one 100G interface + socket transport. IB mode not supported (no GPUDirect on GB10). One QSFP cable = full 200 Gbps.
 
-**NCCL IB mode (experimental):** `--ib` flag mounts `/dev/infiniband` and sets `NCCL_NET=IB`. Both HCAs detected but fails on AllReduce - GPUDirect RDMA not supported on Spark. Disabling GDR causes silent crash. **Status: not working.**
+**NCCL IB mode:** NOT supported on GB10. GPUDirect RDMA unavailable, `nvidia-peermem` fails to load. Socket transport is the official method.
 
 **cuDNN Fix (REQUIRED):** GB10 lacks cuDNN conv3d kernels for sm_121. Mount import hook:
 ```bash
