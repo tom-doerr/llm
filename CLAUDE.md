@@ -7,16 +7,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Key Facts
 
 - **RoCE over Ethernet** via ConnectX-7 QSFP ports (NOT InfiniBand mode)
-- **GPUDirect RDMA NOT supported** on Spark - use `cudaHostAlloc` + `ib_reg_mr` instead
-- **200 Gbit/s = 25 GB/s = ~23.28 GiB/s** line-rate before overheads
+- **GPUDirect RDMA NOT supported** - use host-staged RDMA (`cudaHostAlloc` + `ib_reg_mr`)
+- **Single 200G port = two ~100G "halves"** - TCP/socket tops out ~100 Gb/s per flow
+- **To get ~200 Gb/s:** Need RoCE (NCCL NET/IB) + drive BOTH halves concurrently
 
-## Hardware Quirk: 4 Interfaces, 2 Physical Ports
+## Hardware Quirk: Each Port Has Two "Halves"
 
-GB10 PCIe limitation requires ConnectX-7 **multi-host mode**. You'll see:
-- `enp1s0f0np0`, `enp1s0f1np1`
-- `enP2p1s0f0np0`, `enP2p1s0f1np1`
+Each 200G QSFP port = **two logical interfaces** (need IPs on BOTH for full 200 Gb/s):
+- Port 0: `enp1s0f0np0` + `enP2p1s0f0np0`
+- Port 1: `enp1s0f1np1` + `enP2p1s0f1np1`
 
-Use `ibdev2netdev` to find which is actually **(Up)**.
+Use `ibdev2netdev` to check status, `ethtool <iface>` to verify 200000Mb/s link.
 
 ## Cabling
 
@@ -34,19 +35,17 @@ sudo chmod 600 /etc/netplan/40-cx7.yaml
 sudo netplan apply
 ```
 
-### Option B: Static IPs (non-persistent)
+### Option B: Static IPs on BOTH halves (for full 200 Gb/s)
 ```bash
-# Find active interface first
-ibdev2netdev
+# Node A - both halves of port 1
+sudo ip addr add 192.168.177.11/24 dev enp1s0f1np1
+sudo ip addr add 192.168.177.12/24 dev enP2p1s0f1np1
 
-# Node A (spark-1)
-sudo ip addr add 192.168.100.10/24 dev enp1s0f1np1
-sudo ip link set enp1s0f1np1 up
-
-# Node B (spark-2)
-sudo ip addr add 192.168.100.11/24 dev enp1s0f1np1
-sudo ip link set enp1s0f1np1 up
+# Node B - both halves
+sudo ip addr add 192.168.177.21/24 dev enp1s0f1np1
+sudo ip addr add 192.168.177.22/24 dev enP2p1s0f1np1
 ```
+Set MTU 9000 and disable IPv6 for stable RoCE GID indexing.
 
 ## Verification Commands
 
@@ -207,9 +206,9 @@ export UCX_NET_DEVICES=$MN_IF_NAME
 export RAY_memory_monitor_refresh_ms=0
 ```
 
-**Single interface is NVIDIA official:** [build.nvidia.com/spark/vllm/stacked-sparks](https://build.nvidia.com/spark/vllm/stacked-sparks) recommends one 100G interface + socket transport. IB mode not supported (no GPUDirect on GB10). One QSFP cable = full 200 Gbps.
+**Socket vs RoCE:** vLLM guide uses socket transport (~100 Gb/s). For full ~200 Gb/s, need NCCL NET/IB (RoCE) with IPs on BOTH halves of the port. GPUDirect unsupported but host-staged RoCE works.
 
-**NCCL IB mode:** NOT supported on GB10. GPUDirect RDMA unavailable, `nvidia-peermem` fails to load. Socket transport is the official method.
+**Max throughput path:** TRT-LLM + NVFP4 (23,477 tok/s prefill, 11.73 tok/s decode). See [build.nvidia.com/spark/trt-llm/stacked-sparks](https://build.nvidia.com/spark/trt-llm/stacked-sparks)
 
 **cuDNN Fix (REQUIRED):** GB10 lacks cuDNN conv3d kernels for sm_121. Mount import hook:
 ```bash
