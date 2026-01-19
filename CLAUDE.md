@@ -207,6 +207,8 @@ export UCX_NET_DEVICES=$MN_IF_NAME
 export RAY_memory_monitor_refresh_ms=0
 ```
 
+**Single interface sufficient:** Peak TP=2 bandwidth ~9 Gbit/s (<10% of one 100G link). Second interface only needed for higher TP.
+
 **cuDNN Fix (REQUIRED):** GB10 lacks cuDNN conv3d kernels for sm_121. Mount import hook:
 ```bash
 -v /home/tom/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro
@@ -256,7 +258,7 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **Why head is heavier:** EngineCore (scheduling, KV mgmt), tokenization (CPU-only), vision preprocessing (image decode/resize before GPU), Ray GCS server.
 
-**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder (each GPU keeps full copy). Enabled in `start-vllm-multinode.sh`.
+**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder. Disabled - causes hangs in multi-node encoder profiling.
 
 **Reduce CPU load:** Resize images client-side before API calls (<100KB).
 
