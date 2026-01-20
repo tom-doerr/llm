@@ -1,0 +1,1634 @@
+**TLDR**
+
+* **Yes, one QSFP cable *can* negotiate 200 GbE on DGX Spark — but you won’t see ~200 Gb/s with plain TCP/NCCL-socket.** On Spark, each physical 200 Gb port effectively behaves like **two ~100 Gb “halves”**; **single-flow TCP tops out ~100 Gb/s**, and NCCL **NET/Socket** also tends to land in that range. To get **~190–200 Gb/s aggregate**, you need **RoCE (NCCL NET/IB)** and you must drive **both halves concurrently**. ([NVIDIA Developer Forums][1])
+* **Two cables won’t give you 400 Gb/s on Spark in practice.** People testing two cables still report topping out around the same ~200 Gb/s class. Use two cables only for redundancy/experiments, not because you expect 2× throughput. ([NVIDIA Developer Forums][1])
+* **For Qwen3‑235B‑A22B, the “max batched throughput” path on 2× Spark is: TRT‑LLM + NVFP4 + proper RoCE.** NVIDIA’s published reference for dual Spark is **23,477 tok/s prefill** and **11.73 tok/s decode** (ISL 2048 / OSL 128 / BS=1). ([NVIDIA Developer][2])
+* If you care about **decode-heavy throughput**, add **speculative decoding** (NVIDIA claims up to **2.6×** vs FP8 for Qwen‑235B on dual Spark). ([NVIDIA Developer][3])
+
+---
+
+## 1) Reality check: what “200 GbE with one cable” means on DGX Spark
+
+On DGX Spark, **a single physical 200 GbE port is exposed in Linux as two logical interfaces** (you’ll see the `enp...` *and* the `enP2p...` twin). The key consequence:
+
+* **TCP / NET=Socket:** you usually hit **~100–110 Gb/s** per port because you’re effectively using one “half.” ([NVIDIA Developer Forums][1])
+* **RoCE / NET=IB (NCCL using verbs):** if configured correctly, you can drive **both halves** and get **~196–198 Gb/s aggregate**, and NCCL all‑reduce bus bandwidth around **~23–25 GB/s** (≈190–200 Gb/s class). ([NVIDIA Developer Forums][4])
+
+So: **your instinct (“single cable should give 200 Gb/s”) is directionally right, but only if you’re actually using RoCE/verbs + both halves.**
+
+---
+
+## 2) Single-cable setup that actually gets ~200 Gb/s (RoCE)
+
+### Step A — Identify which port you actually cabled
+
+Run on **both** Sparks:
+
+```bash
+sudo ibdev2netdev
+ip link | egrep 'enp1s0f|enP2p1s0f'
+```
+
+You’re looking for the pair where both the `enp...` **and** its `enP2p...` twin show the link up.
+
+Then confirm link speed on the `enp...` side:
+
+```bash
+sudo ethtool enp1s0f0np0 | egrep 'Speed|Duplex|Link detected|Lanes'
+sudo ethtool enp1s0f1np1 | egrep 'Speed|Duplex|Link detected|Lanes'
+```
+
+You want **Speed: 200000Mb/s** and **Link detected: yes**. ([NVIDIA Developer Forums][4])
+
+---
+
+### Step B — Use static IPs (don’t rely on 169.254.* “it looks like IB” vibes)
+
+Link-local `169.254.0.0/16` is just “no DHCP”; it’s not a magic IB/RDMA indicator. Static IPs are cleaner. ([NVIDIA Developer Forums][5])
+
+Pick a private /24 and assign **one IP per half**.
+
+Example: assume your cable is on **port f1** (adjust names if you’re on f0).
+
+**Node A** (`/etc/netplan/40-cx7.yaml`):
+
+```yaml
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    enp1s0f1np1:
+      dhcp4: no
+      addresses: [192.168.177.11/24]
+      mtu: 9000
+      optional: true
+    enP2p1s0f1np1:
+      dhcp4: no
+      addresses: [192.168.177.12/24]
+      mtu: 9000
+      optional: true
+```
+
+**Node B**:
+
+```yaml
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    enp1s0f1np1:
+      dhcp4: no
+      addresses: [192.168.177.21/24]
+      mtu: 9000
+      optional: true
+    enP2p1s0f1np1:
+      dhcp4: no
+      addresses: [192.168.177.22/24]
+      mtu: 9000
+      optional: true
+```
+
+Apply on each node:
+
+```bash
+sudo netplan apply
+ip -br a | egrep 'enp1s0f|enP2p1s0f'
+```
+
+**Why MTU 9000?** It’s not a miracle, but it helps. In practice, people hit ~196–198 Gb/s aggregate after setting jumbo frames end-to-end. ([NVIDIA Developer Forums][4])
+
+---
+
+### Step C — Disable IPv6 on the CX7 interfaces (practical RoCE stability move)
+
+Multiple folks disable IPv6 on these interfaces to keep **RoCE GID indexing stable**. ([NVIDIA Developer Forums][4])
+
+Quick (runtime) disable:
+
+```bash
+sudo sysctl -w net.ipv6.conf.enp1s0f1np1.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.enP2p1s0f1np1.disable_ipv6=1
+```
+
+Persist it (create a file):
+
+```bash
+sudo tee /etc/sysctl.d/90-spark-cx7-ipv6.conf >/dev/null <<'EOF'
+net.ipv6.conf.enp1s0f1np1.disable_ipv6=1
+net.ipv6.conf.enP2p1s0f1np1.disable_ipv6=1
+EOF
+
+sudo sysctl --system
+```
+
+---
+
+### Step D — Verify you can actually push ~200 Gb/s (2× ~100 Gb/s)
+
+**You only get ~200 Gb/s aggregate if you drive both halves concurrently.**
+
+On **Node B**:
+
+```bash
+iperf3 -s
+```
+
+On **Node A**, run these **at the same time** (two terminals):
+
+Terminal 1 (half 1):
+
+```bash
+iperf3 -c 192.168.177.21 -B 192.168.177.11 -P 16 -t 30
+```
+
+Terminal 2 (half 2):
+
+```bash
+iperf3 -c 192.168.177.22 -B 192.168.177.12 -P 16 -t 30
+```
+
+Expected shape:
+
+* each session ~100 Gb/s-ish
+* aggregate ~196–198 Gb/s if everything is right ([NVIDIA Developer Forums][4])
+
+If you only run one session and get ~100 Gb/s: **that’s normal on Spark**. ([NVIDIA Developer Forums][1])
+
+---
+
+## 3) Make NCCL actually use RoCE (NET/IB), not sockets
+
+### Critical gotcha: missing RDMA libs inside containers → NCCL silently falls back
+
+If `rdma-core` (verbs libs) aren’t available **inside** your container, NCCL can’t use IB/RDMA and will fall back to Ethernet/socket. This shows up as “Using network Socket” in logs. ([NVIDIA Developer Forums][5])
+
+### The “smoking gun” log lines you want
+
+When it’s working, NCCL logs will look like:
+
+* `NCCL_IB_HCA set to rocep...`
+* `NET/IB : Using ... RoCE ... OOB enp...`
+* `Initialized NET plugin IB`
+* `Using network IB` ([NVIDIA Developer Forums][5])
+
+If instead you see `Using network Socket`, you’re leaving a lot on the table.
+
+### Also check for **/etc/nccl.conf sabotage**
+
+People have found a leftover `/etc/nccl.conf` forcing Socket and/or `NCCL_IB_DISABLE=1`, which breaks NET/IB init. ([NVIDIA Developer Forums][4])
+
+---
+
+## 4) GPUDirect RDMA: don’t chase it on Spark
+
+This is non-negotiable: **GPUDirect RDMA is not supported on DGX Spark** due to its unified memory architecture; mechanisms like `nvidia-peermem`, dma-buf, GDRCopy won’t work. NVIDIA explicitly recommends host-buffer fallbacks (e.g., `cudaHostAlloc` + `ib_reg_mr`). ([nvidia.custhelp.com][6])
+
+So the winning plan is: **RoCE works, but it’s host-staged.** You can still hit ~200 Gb/s class, just don’t expect some magical “turn on GPUDirect and get 400 Gb/s.”
+
+---
+
+## 5) Should you use two cables?
+
+**My conclusion:** No, not for throughput. With Spark’s architecture, even “two links” testing often still tops out around the same ~200 Gb/s class overall. ([NVIDIA Developer Forums][1])
+
+**Popular opinion in the Spark community:** “Don’t bother with dual cables unless you’re doing redundancy or you enjoy experiments.” The real performance unlock is **getting NET/IB working** and driving both halves correctly, not adding more copper. ([NVIDIA Developer Forums][4])
+
+---
+
+## 6) Max batched throughput for Qwen 235B on 2× DGX Spark
+
+If you mean **Qwen3‑235B‑A22B**, NVIDIA’s own Spark playbook basically spells out the “best known” stack:
+
+* **Runtime:** TensorRT‑LLM
+* **Quant:** NVFP4
+* **Deployment:** “two Sparks only”
+* **Model handle:** `nvidia/Qwen3-235B-A22B-FP4` ([NVIDIA NIM APIs][7])
+
+And NVIDIA published a reference datapoint on dual Spark:
+
+* **Prompt processing:** **23,477 tokens/s**
+* **Token generation:** **11.73 tokens/s**
+  at **ISL 2048 / OSL 128 / BS=1** ([NVIDIA Developer][2])
+
+### The straight “do this” recipe (NVIDIA’s two‑Spark TRT‑LLM workflow)
+
+Below is the core of NVIDIA’s “Run on two Sparks” playbook; this is the most direct path to “max throughput” without you inventing your own cluster scripts. ([NVIDIA NIM APIs][8])
+
+#### 1) Start TRT‑LLM containers on **both nodes**
+
+Run on **each** node:
+
+```bash
+docker run -d --rm \
+  --name trtllm-multinode \
+  --gpus "device=all" \
+  --network host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  --device /dev/infiniband:/dev/infiniband \
+  -e UCX_NET_DEVICES="enp1s0f0np0,enp1s0f1np1" \
+  -e NCCL_SOCKET_IFNAME="enp1s0f0np0,enp1s0f1np1" \
+  -e OMPI_MCA_btl_tcp_if_include="enp1s0f0np0,enp1s0f1np1" \
+  -e OMPI_MCA_orte_default_hostfile="/etc/openmpi-hostfile" \
+  -e OMPI_MCA_rmaps_ppr_n_pernode="1" \
+  -e OMPI_ALLOW_RUN_AS_ROOT="1" \
+  -e OMPI_ALLOW_RUN_AS_ROOT_CONFIRM="1" \
+  -v ~/.cache/huggingface/:/root/.cache/huggingface/ \
+  -v ~/.ssh:/tmp/.ssh:ro \
+  nvcr.io/nvidia/tensorrt-llm/release:1.2.0rc6 \
+  sh -c "curl https://raw.githubusercontent.com/NVIDIA/dgx-spark-playbooks/refs/heads/main/nvidia/trt-llm/assets/trtllm-mn-entrypoint.sh | sh"
+```
+
+Notes:
+
+* If you only connected **one** QSFP port, you may see a UCX warning about the other port missing; the playbook explicitly says you can ignore it if inference works. ([NVIDIA NIM APIs][8])
+* If you want to be stricter, set those env vars to only the **active** interface(s) to avoid warnings — but don’t do that until you’ve got a working baseline.
+
+#### 2) Create an MPI hostfile (on your “primary” node)
+
+```bash
+cat > ~/openmpi-hostfile <<EOF
+192.168.177.11
+192.168.177.21
+EOF
+```
+
+Then:
+
+```bash
+docker cp ~/openmpi-hostfile trtllm-multinode:/etc/openmpi-hostfile
+export TRTLLM_MN_CONTAINER=trtllm-multinode
+```
+
+#### 3) Tell TRT‑LLM to reserve memory for KV cache
+
+(This matters for batch throughput.)
+
+```bash
+docker exec $TRTLLM_MN_CONTAINER bash -c 'cat <<EOF > /tmp/extra-llm-api-config.yml
+print_iter_log: false
+kv_cache_config:
+  dtype: "auto"
+  free_gpu_memory_fraction: 0.9
+cuda_graph_config:
+  enable_padding: true
+EOF'
+```
+
+This matches NVIDIA’s recommended pattern for multinode serving. ([NVIDIA NIM APIs][8])
+
+#### 4) Download + serve Qwen3‑235B‑A22B‑FP4 with tensor parallel = 2
+
+```bash
+export HF_TOKEN=<your-huggingface-token>
+
+docker exec \
+  -e MODEL="nvidia/Qwen3-235B-A22B-FP4" \
+  -e HF_TOKEN=$HF_TOKEN \
+  -it $TRTLLM_MN_CONTAINER bash -c 'mpirun -x HF_TOKEN bash -c "hf download $MODEL"'
+```
+
+Serve:
+
+```bash
+docker exec \
+  -e MODEL="nvidia/Qwen3-235B-A22B-FP4" \
+  -e HF_TOKEN=$HF_TOKEN \
+  -it $TRTLLM_MN_CONTAINER bash -c '
+    mpirun -x HF_TOKEN trtllm-llmapi-launch trtllm-serve $MODEL \
+      --tp_size 2 \
+      --backend pytorch \
+      --max_num_tokens 32768 \
+      --max_batch_size 4 \
+      --extra_llm_api_options /tmp/extra-llm-api-config.yml \
+      --port 8355'
+```
+
+This is literally the “two Sparks” reference workflow. ([NVIDIA NIM APIs][8])
+
+---
+
+## 7) How to actually push “max batched throughput” beyond the baseline
+
+Here’s the non-hand-wavy tuning logic:
+
+### A) If you want max **prefill throughput**
+
+* Increase **`--max_batch_size`** until you hit memory limits or latency goals.
+* Keep **NVFP4** (it’s why this is even possible on Spark). NVFP4 is positioned as a major memory reduction vs FP16/FP8 and typically small accuracy loss. ([NVIDIA NIM APIs][9])
+* Make sure you’re not on NET/Socket (RoCE matters most under load).
+
+### B) If you want max **decode throughput**
+
+Decode is the painful part for huge models. The two levers that actually move it:
+
+1. **Speculative decoding**
+   NVIDIA has a Spark playbook for it and cites up to **2.6×** improvement vs FP8 for Qwen‑235B on dual Spark (their blog). ([NVIDIA Developer][3])
+
+2. **KV cache precision and headroom**
+   Your `free_gpu_memory_fraction: 0.9` and `kv_cache_config` are exactly about this. If you starve KV, your “batched throughput” collapses under concurrency. ([NVIDIA NIM APIs][8])
+
+### C) Use published numbers as your sanity check
+
+If you’re wildly below NVIDIA’s published **11.73 tok/s decode** (BS=1) or your prompt throughput is nowhere near **23k tok/s**, you’re likely:
+
+* not running NVFP4 TRT‑LLM,
+* not using RoCE/IB,
+* or you’re memory-thrashing (KV). ([NVIDIA Developer][2])
+
+---
+
+## 8) Quick “if X then Y” debugging map
+
+* **You see ~100 Gb/s and can’t exceed it**
+  → You’re probably only driving one “half” (or you’re using TCP/Socket). Run **two iperf sessions bound to the two IPs** and check MTU 9000. ([NVIDIA Developer Forums][4])
+
+* **NCCL logs show `Using network Socket`**
+  → IB/RDMA path isn’t active. Check container has RDMA libs + /dev/infiniband is mounted; check no `/etc/nccl.conf` is disabling IB. ([NVIDIA Developer Forums][5])
+
+* **You’re trying to “enable GPUDirect RDMA”**
+  → Stop. It’s not supported on Spark. Use host-staged RDMA; that’s the intended fallback. ([nvidia.custhelp.com][6])
+
+---
+
+If you want, paste **(a)** your `ibdev2netdev` output and **(b)** one NCCL log snippet showing whether it says `NET/IB` or `NET/Socket`, and I’ll tell you exactly which layer is still wrong — but the steps above are the shortest path to “single cable, ~200 Gb/s class, Qwen‑235B max throughput.”
+
+[1]: https://forums.developer.nvidia.com/t/connectx-7-nic-in-dgx-spark/350417?page=4 "ConnectX-7 NIC in DGX Spark - Page 4 - DGX Spark / GB10 - NVIDIA Developer Forums"
+[2]: https://developer.nvidia.com/blog/how-nvidia-dgx-sparks-performance-enables-intensive-ai-tasks/ "How NVIDIA DGX Spark’s Performance Enables Intensive AI Tasks | NVIDIA Technical Blog"
+[3]: https://developer.nvidia.com/blog/new-software-and-model-optimizations-supercharge-nvidia-dgx-spark/ "New Software and Model Optimizations Supercharge NVIDIA DGX Spark | NVIDIA Technical Blog"
+[4]: https://forums.developer.nvidia.com/t/dgx-spark-gb10-connectx-7-200gbe-via-mikrotik-crs812-qsfp-dd-2xqsfp56-breakout/357162 "https://forums.developer.nvidia.com/t/dgx-spark-gb10-connectx-7-200gbe-via-mikrotik-crs812-qsfp-dd-2xqsfp56-breakout/357162"
+[5]: https://forums.developer.nvidia.com/t/install-and-use-vllm-for-inference-on-two-sparks-does-not-work/349496?page=5 "Install and Use vLLM for Inference on two Sparks does not work - Page 5 - DGX Spark / GB10 - NVIDIA Developer Forums"
+[6]: https://nvidia.custhelp.com/app/answers/detail/a_id/5780/~/is-gpudirect-rdma-supported-on-dgx-spark%3F "https://nvidia.custhelp.com/app/answers/detail/a_id/5780/~/is-gpudirect-rdma-supported-on-dgx-spark%3F"
+[7]: https://build.nvidia.com/spark/trt-llm "https://build.nvidia.com/spark/trt-llm"
+[8]: https://build.nvidia.com/spark/trt-llm/stacked-sparks "https://build.nvidia.com/spark/trt-llm/stacked-sparks"
+[9]: https://build.nvidia.com/spark/nvfp4-quantization "NVFP4 Quantization | DGX Spark"
+
+  **TLDR**
+
+* ✅ **“One QSFP cable can reach full 200GbE” is explicitly NVIDIA’s guidance** (it’s written in NVIDIA’s Connect Two Sparks + NCCL playbooks). ([build.nvidia.com][1])
+* ✅ **“GPUDirect RDMA is not supported on DGX Spark/GB10” is explicitly stated by NVIDIA** (and they explain why). ([NVIDIA Developer Forums][2])
+* ✅ **“InfiniBand *mode* isn’t supported” is basically correct**: NVIDIA’s Spark user guide says the CX-7 ports support **Ethernet configuration only** (i.e., RoCE not IB link-layer). ([NVIDIA Docs][3])
+* ❌ **“single 100G interface” is wrong/misleading**: people see **200000Mb/s** link speed on a single cable, and NVIDIA playbooks call it **200GbE**. ([NVIDIA Developer Forums][4])
+* ⚠️ **“Socket transport is the official method” is overstated**: NVIDIA playbooks set `NCCL_SOCKET_IFNAME`, but NCCL still shows **NET/IB** (ibverbs/RoCE) with **GDR disabled** in real runs—so “socket-only” is not what’s actually happening by default. ([build.nvidia.com][5])
+* ❓ **“~9 Gbit/s is normal for TP=2 traffic” is not supported by the cited source** and is not something NVIDIA states; it might be a *workload-specific observation*, but you can’t generalize it.
+
+---
+
+## Claim-by-claim fact check
+
+### 1) “Current Setup is NVIDIA Official”
+
+**Verdict: depends on what “current setup” is.**
+
+If “current setup” means:
+
+* connect 2 Sparks with QSFP/CX7,
+* configure the high-speed interface,
+* and run NCCL/vLLM using the playbooks,
+
+…then yes, that workflow is official and documented. ([build.nvidia.com][6])
+
+If it means “assume only 100G is possible” or “assume sockets are the only real transport,” then **no**—that’s not what NVIDIA documents or what NCCL logs show in practice. ([NVIDIA Developer Forums][7])
+
+---
+
+### 2) “NVIDIA recommends single 100G interface + socket transport for dual Spark.”
+
+**Verdict: mostly wrong / muddled.**
+
+What NVIDIA actually documents:
+
+* They describe the direct interconnect as **200GbE** with a QSFP cable. ([build.nvidia.com][1])
+* They explicitly say **one QSFP cable is enough for full bandwidth**. ([build.nvidia.com][1])
+* They do set `NCCL_SOCKET_IFNAME` and other TCP/socket-ish vars in both the NCCL and vLLM playbooks. ([build.nvidia.com][5])
+
+What’s wrong in the plan:
+
+* **“100G”**: Users report **ethtool Speed: 200000Mb/s** on a single back-to-back cable. ([NVIDIA Developer Forums][4])
+* **“socket transport”**: `NCCL_SOCKET_IFNAME` is present in the playbook, but real NCCL runs still log **NET/IB** (RoCE/ibverbs) with GDR disabled; that’s not “socket-only.” ([NVIDIA Developer Forums][7])
+
+So: **single-cable is right; “100G + socket transport” is not.**
+
+---
+
+### 3) “IB mode NOT supported (no GPUDirect on GB10)”
+
+**Verdict: partially true, but needs precise wording.**
+
+* **InfiniBand link-layer / IB mode:** NVIDIA’s DGX Spark user guide states: **“The DGX Spark CX-7 ports support ethernet configuration only.”** ([NVIDIA Docs][3])
+  That supports “IB mode not supported” *if* you mean “cannot be configured as InfiniBand link layer.”
+
+* **GPUDirect RDMA:** NVIDIA explicitly says **GPUDirect RDMA is not supported**, and mechanisms like `nvidia-peermem`, dma-buf, GDRCopy “do not work.” ([NVIDIA Developer Forums][2])
+
+Important nuance you should not lose:
+
+* Ethernet-only **does not mean “no RDMA.”** It means RoCE (RDMA over Ethernet) is the path. NCCL even logs `NET/IB` and “GDR disabled” against `roce*` HCAs. ([NVIDIA Developer Forums][7])
+
+So the accurate statement is:
+
+> **Ethernet-only (RoCE), and GPUDirect RDMA is unsupported** (expect CPU-bounce behavior).
+
+---
+
+### 4) “One QSFP cable = full 200 Gbps (dual not required)”
+
+**Verdict: true (official + corroborated).**
+
+NVIDIA’s playbooks literally say:
+
+* **“Full bandwidth can be achieved with just one QSFP cable.”** ([build.nvidia.com][1])
+
+And forum users report the port negotiating at **200000Mb/s** using a single cable. ([NVIDIA Developer Forums][4])
+
+Also: there’s a common pitfall where plugging *both* cables without configuring all interfaces can effectively drop throughput. NVIDIA forum guidance indicates connecting both ports can “bump down speed to 100Gbps” in certain setups. ([NVIDIA Developer Forums][7])
+
+---
+
+### 5) “Socket transport is official method”
+
+**Verdict: misleading / not demonstrated by the sources.**
+
+What’s true:
+
+* NVIDIA playbooks set `NCCL_SOCKET_IFNAME` and other TCP interface selectors. ([build.nvidia.com][5])
+
+What that does **not** prove:
+
+* That NCCL is using “socket transport” as the primary data path.
+
+Evidence against “socket-only”:
+
+* In NCCL debug output from DGX Spark users, NCCL reports **`NET/IB`** and explicitly says **“GPU Direct RDMA Disabled for HCA … ‘roce…’”**. That means NCCL is going through its IB/verbs network path (RoCE/ibverbs), but without GPUDirect RDMA. ([NVIDIA Developer Forums][7])
+
+So a better phrasing is:
+
+* **Official playbooks configure the socket interface selection**, but NCCL may still use **RoCE/ibverbs** (logged as NET/IB) with GDR disabled.
+
+---
+
+### 6) “~9 Gbit/s is normal for TP=2 traffic”
+
+**Verdict: not verifiable from the cited source; likely misleading as a blanket statement.**
+
+* The cited NVIDIA vLLM playbook **does not** say anything like “expect ~9 Gbit/s.” ([build.nvidia.com][6])
+* We *do* have evidence that the interconnect can do roughly:
+
+  * ~**22 GB/s** “busbw” in `all_gather_perf` when configured right (that’s ~176 Gbps; 25 GB/s would be 200 Gbps theoretical). ([NVIDIA Developer Forums][7])
+  * and users mention **24–25 GB/s** expectations in context of “200Gbps.” ([NVIDIA Developer Forums][4])
+
+If someone saw **9 Gbit/s** during TP=2 inference, it could be:
+
+* a measurement artifact,
+* a workload that doesn’t saturate bandwidth,
+* CPU-bound behavior,
+* or simply “bits vs bytes” confusion (9 **GB/s** vs 9 **Gb/s** is an 8× difference).
+
+But you cannot call it “normal” without a defined workload + measurement + baseline.
+
+---
+
+## The biggest issue: the stated “Source” doesn’t support several bullets
+
+Your plan says the source is `build.nvidia.com/spark/vllm/stacked-sparks`.
+
+That page **does** show the socket interface env vars and points to the connectivity playbook. ([build.nvidia.com][6])
+But it **does not** itself establish:
+
+* Ethernet-only ports,
+* GPUDirect RDMA unsupported,
+* or any “9 Gbit/s is normal” performance claim.
+
+Those come from:
+
+* DGX Spark User Guide “Spark Stacking” (Ethernet-only) ([NVIDIA Docs][3])
+* NVIDIA forum FAQ / moderator answers (GPUDirect RDMA unsupported) ([NVIDIA Developer Forums][2])
+* NVIDIA playbooks + forum measurements (one-cable full bandwidth + link speed). ([build.nvidia.com][1])
+
+---
+
+## If you want a corrected “CLAUDE.md guidance” snippet (drop-in)
+
+Here’s a clean, accurate version you can paste:
+
+* **Interconnect:** DGX Spark stacking uses **CX-7 QSFP ports in Ethernet-only configuration (RoCE)**, not InfiniBand link-layer. ([NVIDIA Docs][3])
+* **Cabling:** **One QSFP cable is sufficient for full 200GbE bandwidth**; two cables require IP configuration across all interfaces for full aggregate bandwidth. ([build.nvidia.com][1])
+* **GPUDirect:** **GPUDirect RDMA is not supported** on DGX Spark/GB10; expect CPU bounce-buffer behavior (NCCL logs show GDR disabled). ([NVIDIA Developer Forums][2])
+* **Validation:** Use `nccl-tests` (`all_gather_perf`) and/or `ethtool` to confirm you’re near expected throughput (≈22–24 GB/s is typical for a 200Gbps link with overhead). ([NVIDIA Developer Forums][7])
+
+If you paste your actual “current setup” (what cables, which ports, what env vars, what benchmark output), I can sanity-check whether it matches the official playbooks line-by-line.
+
+[1]: https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks "Connect Two Sparks | DGX Spark"
+[2]: https://forums.developer.nvidia.com/t/dgx-spark-gb10-faq/347344 "DGX Spark / GB10 FAQ - DGX Spark / GB10 - NVIDIA Developer Forums"
+[3]: https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html "Spark Stacking — DGX Spark User Guide"
+[4]: https://forums.developer.nvidia.com/t/confusion-surrounding-the-qsfp-ports-and-bandwidth/356092 "Confusion surrounding the QSFP ports and bandwidth - DGX Spark / GB10 - NVIDIA Developer Forums"
+[5]: https://build.nvidia.com/spark/nccl/stacked-sparks "NCCL for Two Sparks | DGX Spark"
+[6]: https://build.nvidia.com/spark/vllm/stacked-sparks "vLLM for Inference | DGX Spark"
+[7]: https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077 "DGX Spark NCCL Test: 10GB/s not 200 Gbps=25 GB/s - DGX Spark / GB10 - NVIDIA Developer Forums"
+
+**TLDR**
+
+* If you’re not explicitly passing `--mm-encoder-tp-mode data`, then **no** — you’re **not** doing “data-parallel mm encoding”; vLLM defaults to `weights`. ([vLLM][1])
+* On a **dual DGX Spark** setup (TP=2 across two systems), you **probably should** enable `--mm-encoder-tp-mode data` **for vision-language models that support it**, because it avoids the vision-encoder per-layer comms overhead that can be brutal across nodes. vLLM’s own recipes recommend it for exactly that reason. ([vLLM][2])
+* The two real caveats: **(1)** slightly higher memory (encoder weights replicated), **(2)** it can interact badly with **multimodal profiling/startup** in some setups—use `--skip-mm-profiling` + leave memory headroom if that’s what bit you. ([vLLM][1])
+
+---
+
+## 1) What “data-parallel mm encoding” actually means in vLLM
+
+`--mm-encoder-tp-mode` only affects the **multimodal encoder** (typically a ViT). It has two modes: ([vLLM][1])
+
+* **`weights` (default):** encoder weights are *sharded* across TP ranks (classic tensor parallel).
+* **`data`:** encoder weights are *replicated* on every TP rank, and the **image batch is split across ranks** (“batch-level DP”). Importantly: **this is not the same thing as** request-level `--data-parallel-size`. ([vLLM][1])
+
+So yes, the name is confusing: it’s “DP-like” but **inside one engine**, using the same TP ranks.
+
+---
+
+## 2) Are you doing it right now?
+
+You are **only** doing it if your launch includes:
+
+```bash
+--mm-encoder-tp-mode data
+```
+
+If you don’t specify it, vLLM’s default is:
+
+* `--mm-encoder-tp-mode weights` ([vLLM][1])
+
+Also: even if you pass `data`, vLLM can silently **fall back to `weights`** for models that don’t implement it, and logs a warning. ([vLLM][3])
+
+---
+
+## 3) Should you enable it on dual DGX Spark?
+
+### My conclusion (tell-it-like-it-is)
+
+**Yes — if you are serving image/video inputs and your model supports it, `--mm-encoder-tp-mode data` is usually the right move** on a 2-node Spark cluster.
+
+Reason: on Spark you’re explicitly using the **ConnectX networking to span nodes** (NVIDIA even markets that 2-unit setup for scaling up to ~405B-param models). That’s great for making big models fit, but it also means **cross-node collectives are a constant tax.** ([NVIDIA][4])
+
+Batch-level DP for the vision encoder is designed to remove the **per-layer synchronization** overhead from the vision forward pass, which is often “all pain, little gain” because the vision encoder is small relative to the decoder. vLLM’s own Qwen VL recipes explicitly recommend `data` mode for this exact reason (small encoder → TP adds comm overhead; `data` can be faster; costs some memory). ([vLLM][2])
+
+### Popular opinion (what most people do)
+
+* Among people actively serving VL models in vLLM: **enable it** when supported (especially at higher TP), because it’s “one flag, real win.” ([vLLM][2])
+* Conservative ops folks: leave default `weights` unless they’ve tested stability, because multimodal stacks can be finicky and bugs happen.
+
+### Concrete evidence it’s used on dual Spark in the wild
+
+On NVIDIA’s DGX Spark forum, people running **TP=2 across a dual Spark cluster** are explicitly using `--mm-encoder-tp-mode data` (often with lower `--gpu-memory-utilization`, like `0.7`) and reporting usable performance. ([NVIDIA Developer Forums][5])
+
+---
+
+## 4) Why it helps (and what you give up)
+
+### Why it tends to help
+
+* Vision encoders are typically a tiny fraction of total params; sharding them buys little, but forces synchronization.
+
+  * Example from vLLM docs: in Qwen2.5-VL-72B the ViT is **675M params vs 72B** LM params — i.e., the encoder is small, so TP on it is mostly comm overhead. ([vLLM][6])
+* Benchmarks (different hardware than yours, but shows the effect size): switching to DP-mode for the vision encoder improved request throughput anywhere from basically flat to **~+44%** depending on image size/items per request in one study. ([rocm.blogs.amd.com][7])
+
+### What you give up / risks
+
+1. **More memory**: encoder weights replicate on every TP rank (per GPU memory goes up a bit). vLLM recipes explicitly warn you may need to tune `--gpu-memory-utilization`. ([vLLM][2])
+2. **More “moving parts”** in distributed execution. If you already saw **multi-node hangs during multimodal profiling**, don’t ignore that.
+
+---
+
+## 5) The hang you mentioned: the pragmatic workaround
+
+If the hang is happening during vLLM’s **multimodal memory profiling / init**, the most direct lever is:
+
+* `--skip-mm-profiling`
+
+vLLM documents that this **skips multimodal memory profiling**, reduces startup time, and **pushes the responsibility onto you** to leave enough memory headroom for encoder activations/embedding cache. ([vLLM][1])
+
+In practice on dual Spark, people often pair “harder” configs with a conservative memory utilization (example: `--gpu-memory-utilization 0.7`). ([NVIDIA Developer Forums][5])
+
+If you go this route, do it deliberately:
+
+* lower `--gpu-memory-utilization` first
+* cap multimodal payloads via `--limit-mm-per-prompt` (images/videos) to prevent someone from sending a monster request and detonating your memory ([vLLM][6])
+
+---
+
+## 6) What I’d do on dual DGX Spark
+
+### If you actually serve images (VL)
+
+1. Enable:
+
+   * `--mm-encoder-tp-mode data` ([vLLM][1])
+2. If you hit startup hangs:
+
+   * add `--skip-mm-profiling`
+   * drop `--gpu-memory-utilization` (start conservative, then raise) ([vLLM][2])
+3. Put guardrails:
+
+   * `--limit-mm-per-prompt '{"image":<N>,"video":0}'` (or similar) ([vLLM][6])
+
+### If you’re mostly text-only
+
+Don’t overthink it: **disable multimodal entirely** (so there’s no encoder work to optimize). vLLM’s Qwen3-VL guide explicitly calls out that setting `--limit-mm-per-prompt.image 0 --limit-mm-per-prompt.video 0` skips the vision encoder + multimodal profiling and frees memory for KV cache. ([vLLM][2])
+
+---
+
+## 7) One more “don’t get burned” note
+
+Long-running multimodal serving can still hit weird GPU memory behavior. There are open bug reports of VRAM usage growing over days with VL workloads (not necessarily caused by `mm-encoder-tp-mode data`, but it’s a real ops risk). Watch memory, and be ready to roll restarts if needed. ([GitHub][8])
+
+[1]: https://docs.vllm.ai/en/v0.10.2/configuration/engine_args.html "https://docs.vllm.ai/en/v0.10.2/configuration/engine_args.html"
+[2]: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html "https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html"
+[3]: https://docs.vllm.ai/en/v0.10.2/api/vllm/config/index.html "https://docs.vllm.ai/en/v0.10.2/api/vllm/config/index.html"
+[4]: https://www.nvidia.com/en-us/products/workstations/dgx-spark/ "https://www.nvidia.com/en-us/products/workstations/dgx-spark/"
+[5]: https://forums.developer.nvidia.com/t/dgx-spark-nemotron3-and-nvfp4-getting-to-65-tps/355261 "https://forums.developer.nvidia.com/t/dgx-spark-nemotron3-and-nvfp4-getting-to-65-tps/355261"
+[6]: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen2.5-VL.html "https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen2.5-VL.html"
+[7]: https://rocm.blogs.amd.com/software-tools-optimization/vllm-dp-vision/README.html "https://rocm.blogs.amd.com/software-tools-optimization/vllm-dp-vision/README.html"
+[8]: https://github.com/vllm-project/vllm/issues/28230 "https://github.com/vllm-project/vllm/issues/28230"
+
+**TLDR**
+
+* **Pick option 1 (Enable RoCE / `NCCL_NET=IB`)**. Dual DGX Spark = **two-node, two-GPU** setup, and you only get sane multi-node perf if you use the ConnectX RDMA path. DGX Spark’s CX-7 ports are **Ethernet-only**, so this is **RoCE**, not “real InfiniBand.” ([NVIDIA Docs][1])
+* For **Qwen3‑VL‑235B‑A22B @ 4‑bit**, start with **vLLM + AWQ 4‑bit** (least pain, already proven by multiple Spark users). A real datapoint: **~26 tok/s @ concurrency=1** and **~63 tok/s @ concurrency=10** on a **2‑node Spark cluster** for the AWQ model. ([NVIDIA Developer Forums][2])
+* **TRT‑LLM is not the first choice for *Qwen3‑VL‑235B*** today because NVIDIA’s Spark TRT‑LLM “supported model” list explicitly includes **Qwen3‑235B (text-only)** on two Sparks, but **doesn’t list Qwen3‑VL‑235B**—so you’re in “DIY / sharp edges” territory. ([NVIDIA NIM APIs][3])
+
+---
+
+## What “right choice” means here
+
+You’re trying to run **a 235B MoE VLM** on **two separate machines**. That breaks into two hard requirements:
+
+1. **Make two Sparks behave like one distributed inference box.**
+   That’s *network + NCCL + RDMA*. (This is option **1**.)
+
+2. **Pick an inference stack that actually runs Qwen3‑VL‑235B in 4-bit without you spelunking kernel/plugin hell.**
+   That’s usually **vLLM + AWQ** right now for this specific model.
+
+So if your UI forces a *single* choice: **choose 1**. Then choose your backend afterward.
+
+---
+
+## Why option 1 is basically mandatory on dual DGX Spark
+
+* NVIDIA positions DGX Spark’s **ConnectX networking** specifically to “connect two DGX Spark systems” and run models up to **~405B parameters**. ([NVIDIA][4])
+* The official Spark “stacking / clustering” guidance is literally about wiring two Sparks via the CX-7 and using **MPI + NCCL**—and it explicitly notes the CX-7 ports are **Ethernet configuration only** (so: RoCE, not IB fabric). ([NVIDIA Docs][1])
+
+**Reality check (don’t assume marketing numbers):**
+A reviewer found the ConnectX-7 sits behind a **PCIe Gen5 x4** link and measured ~**96 Gb/s** even when pushing traffic across both ports in iperf, implying you may not actually realize a full 200 Gb/s of usable throughput. ([ServeTheHome][5])
+That doesn’t make RoCE useless—it just means **your scaling ceiling may be lower than “200G” implies**, so you should optimize for **low latency + stable RDMA**, not chase a perfect headline number.
+
+---
+
+## Backend choice for Qwen3‑VL‑235B @ 4-bit on two Sparks
+
+### The pragmatic “it works” choice: **vLLM + AWQ 4-bit**
+
+Evidence from Spark users is strong enough that I’d treat this as the default:
+
+* In NVIDIA’s own DGX Spark forum benchmarks, **QuantTrio/Qwen3‑VL‑235B‑A22B‑Instruct‑AWQ** on a **2‑node** configuration is reported at:
+
+  * **TPS=26** at **concurrency=1**
+  * **TPS=63** at **concurrency=10** ([NVIDIA Developer Forums][2])
+* Same thread: AWQ is reported to **materially reduce latency** vs FP8 for this model (example numbers in that report: **TPOT 44ms → 30ms**, **TTFT 128ms → 88ms** at low concurrency). ([NVIDIA Developer Forums][6])
+* The AWQ checkpoint exists and is widely used (e.g., QuantTrio). ([Hugging Face][7])
+
+**My conclusion:** for “Qwen3‑VL‑235B 4‑bit on 2× Spark”, **vLLM + AWQ** is the best first move.
+
+**Popular opinion (what you’ll see in practice):** same—most people doing this on Sparks start with vLLM/SGLang + AWQ, because it’s the shortest path to working throughput without engine-building drama.
+
+---
+
+### The “4-bit but FP4” option: **NVFP4 checkpoints (still usually vLLM first)**
+
+If by “4bit” you mean **FP4/NVFP4** (not int4 weight-only), there are real checkpoints:
+
+* Example: **RedHatAI/Qwen3‑VL‑235B‑A22B‑Instruct‑NVFP4** says it’s FP4 (weights+activations) and “ready for inference with vLLM >= 0.9.1”, claiming ~75% memory reduction vs 16-bit. ([Hugging Face][8])
+
+**But be skeptical:** NVFP4 on MoE + new hardware paths has had churn across stacks (and you may hit “supported in theory” vs “fast and stable in practice”). So I’d treat NVFP4 as **phase 2**, after AWQ is running.
+
+---
+
+### Why I *wouldn’t* start with TRT‑LLM for Qwen3‑VL‑235B (today)
+
+NVIDIA’s DGX Spark TRT‑LLM playbook has a **support matrix**. It includes **Qwen3‑235B-A22B (two Sparks only)** in NVFP4… but **not Qwen3‑VL‑235B**. ([NVIDIA NIM APIs][3])
+
+So if you “Switch to TRT‑LLM” right away, you’re likely signing up for:
+
+* custom conversion/quantization steps,
+* potential missing kernels/plugins for your exact VL MoE path,
+* extra debugging you didn’t need.
+
+TRT‑LLM *is* the long-term bet for peak throughput, but for *this specific model*, on *this specific dual-node desktop-ish cluster*, the support signal says: **not the shortest path**.
+
+---
+
+## A sane decision tree
+
+### If your goal is “run Qwen3‑VL‑235B 4-bit successfully this week”
+
+1. **Option 1: RoCE/`NCCL_NET=IB`** (cluster plumbing) ([NVIDIA Docs][1])
+2. **vLLM + AWQ 4-bit model** (QuantTrio AWQ is a known-good direction) ([NVIDIA Developer Forums][2])
+
+### If your goal is “squeeze max performance later”
+
+1. Still **Option 1** first
+2. Try **NVFP4** checkpoint(s) once stable
+3. Only then evaluate **TRT‑LLM** when Qwen3‑VL appears in a supported Spark recipe/matrix (or you’re ready to DIY).
+
+---
+
+## Tiny but important gotchas
+
+* Don’t waste time trying to “flip the port into InfiniBand mode.” DGX Spark CX-7 ports are documented as **Ethernet-only**—you’re doing **RoCE**. ([NVIDIA Docs][1])
+* Expect **bandwidth constraints** vs server-class multi-GPU boxes; one published datapoint suggests ~**96 Gb/s** effective in simple tests, which can cap distributed scaling if your workload becomes comm-heavy. ([ServeTheHome][5])
+* The numbers that look insane (like **23,477 tok/s**) are **prefill throughput** for text-only Qwen3‑235B in NVIDIA’s marketing/bench context, not the same as steady-state VLM generation in your app. ([NVIDIA Developer][9])
+
+---
+
+## Bottom line
+
+For **Qwen3‑VL‑235B @ 4-bit on dual DGX Spark**, the “right choice” is:
+
+**✅ Option 1 (Enable RoCE / `NCCL_NET=IB`) + vLLM with an AWQ 4-bit checkpoint**, because it’s the most evidence-backed path with real reported throughput on a 2-node Spark cluster (~**26 tok/s** at concurrency 1). ([NVIDIA Developer Forums][2])
+
+If you tell me your target serving mode (single-user interactive vs multi-user throughput, and your context length target like 8k vs 128k vs 256k), I can give you a sharper “expected TPS + what to tune first” plan.
+
+[1]: https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html "Spark Stacking — DGX Spark User Guide"
+[2]: https://forums.developer.nvidia.com/t/6x-spark-setup/354399?page=2 "https://forums.developer.nvidia.com/t/6x-spark-setup/354399?page=2"
+[3]: https://build.nvidia.com/spark/trt-llm "TRT LLM for Inference | DGX Spark"
+[4]: https://www.nvidia.com/en-us/products/workstations/dgx-spark/ "A Grace Blackwell AI supercomputer on your desk | NVIDIA DGX Spark"
+[5]: https://www.servethehome.com/nvidia-dgx-spark-review-the-gb10-machine-is-so-freaking-cool/2/ "NVIDIA DGX Spark Review The GB10 Machine is so Freaking Cool - Page 2 of 4 - ServeTheHome"
+[6]: https://forums.developer.nvidia.com/t/6x-spark-setup/354399 "https://forums.developer.nvidia.com/t/6x-spark-setup/354399"
+[7]: https://huggingface.co/QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ "https://huggingface.co/QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
+[8]: https://huggingface.co/RedHatAI/Qwen3-VL-235B-A22B-Instruct-NVFP4?utm_source=chatgpt.com "RedHatAI/Qwen3-VL-235B-A22B-Instruct-NVFP4"
+[9]: https://developer.nvidia.com/blog/how-nvidia-dgx-sparks-performance-enables-intensive-ai-tasks/ "https://developer.nvidia.com/blog/how-nvidia-dgx-sparks-performance-enables-intensive-ai-tasks/"
+
+**TLDR**
+
+* You’re right about the *hardware reality*: DGX Spark / **GB10 does not support GPUDirect RDMA**, and NVIDIA explicitly says **dma-buf / nvidia‑peermem / GDRCopy don’t work** on this platform. ([NVIDIA Developer Forums][1])
+* But your “**you’re stuck with Socket (~100 Gb/s) because NCCL requires GPUDirect for IB**” conclusion is **too strong**. There are confirmed Spark runs where **NCCL uses NET/IB with “GPU Direct RDMA Disabled” and still hits ~22 GB/s busbw (~176 Gb/s)**. ([NVIDIA Developer Forums][2])
+* What *actually* seems broken is **your specific NCCL inside the NGC container** (very likely an external net plugin / IBext path) enabling **DMABUF anyway** and not honoring the “disable” knobs, which matches known NCCL/plugin weirdness. ([GitHub][3])
+* Your workaround **`NCCL_NET=Socket` is valid and documented**. ([NVIDIA Docs][4])
+* If you want a serious shot at **~190–200 Gb/s inside NCCL**, the more plausible fix is: **use the Spark playbook NCCL build (v2.28.9-1)** or force NCCL off external plugins + off dmabuf (details below). ([build.nvidia.com][5])
+
+---
+
+## 1) The part you nailed: “GB10 can’t do GPUDirect RDMA” is not opinion, it’s NVIDIA’s statement
+
+NVIDIA’s own DGX Spark / GB10 forum response is unambiguous:
+
+* On DGX Spark’s unified-memory architecture, **memory from `cudaMalloc` cannot be coherently accessed by CPU or PCIe devices**, so **GPUDirect RDMA is not supported**, and **direct I/O mechanisms (nvidia‑peermem, dma‑buf, GDRCopy) don’t work**. ([NVIDIA Developer Forums][1])
+* They explicitly recommend that **applications should introspect** (CUDA device attributes) and **fall back**, e.g. allocate comm buffers with `cudaHostAlloc` and register them with `ib_reg_mr`. ([NVIDIA Developer Forums][1])
+
+So the “RDMA bandwidth exists (host ↔ host) but GPU-direct doesn’t” framing is correct.
+
+---
+
+## 2) Where your writeup overreaches: “NCCL IB requires GPUDirect” is not generally true
+
+Two hard counterpoints from official-ish sources:
+
+1. **NCCL itself supports running IB without GPU Direct RDMA.**
+   You can explicitly disable GDR with `NCCL_NET_GDR_LEVEL=LOC` (or legacy integer 0), and there are further knobs like `NCCL_NET_GDR_READ`. ([NVIDIA Docs][4])
+
+2. On DGX Spark specifically, people have run NCCL tests showing:
+
+   * `NET/IB : GPU Direct RDMA Disabled ...`
+   * Yet they still get **~22 GB/s bus bandwidth** on a large `all_gather_perf` run (≈ **176 Gb/s**, close to a 200G link’s practical ceiling). ([NVIDIA Developer Forums][2])
+
+So the truthful statement is closer to:
+
+> “In *our NGC container stack*, NCCL’s IB path tries DMABUF and crashes instead of staging.”
+
+That’s a *stack-specific failure mode*, not a fundamental NCCL requirement.
+
+---
+
+## 3) The most likely root cause: you’re hitting an external net plugin / dmabuf path that doesn’t degrade gracefully
+
+The log line you quoted:
+
+> `NET/IB : GPU Direct RDMA (DMABUF) enabled ...` then crash
+
+…screams “**dma-buf registration path got selected**.” NCCL has an explicit switch for that:
+
+* `NCCL_DMABUF_ENABLE` (since 2.13) controls “GPU Direct RDMA buffer registration using the Linux dma-buf subsystem.” ([NVIDIA Docs][4])
+
+And you’re also probably dealing with a **net plugin** (common in NGC/HPC stacks). NCCL will load `libnccl-net.so` (or variants) unless told otherwise; you can disable external net plugins by setting:
+
+* `NCCL_NET_PLUGIN=none` ([NVIDIA Docs][4])
+
+This matters because:
+
+* **`NCCL_IB_DISABLE=1` is *supposed* to force sockets**, but there are known cases where it’s ignored when IBext/net plugins get involved. ([NVIDIA Docs][6])
+* “Removing `/dev/infiniband`” doesn’t stop NCCL from *loading a plugin* and trying to do IB-ish init anyway; it just makes it fail in weirder ways.
+
+So your observation (“no graceful fallback”) is believable **for that container/plugin combo**, but the **fix space is bigger than `NCCL_NET=Socket`**.
+
+---
+
+## 4) Your workaround is real and correct, but it’s the “safe mode” option
+
+Per NCCL docs:
+
+* `NCCL_NET` can force a specific network module; internal names include **“IB”** and **“Socket”**. ([NVIDIA Docs][4])
+
+So:
+
+```bash
+export NCCL_NET=Socket
+```
+
+is a legit way to bypass IB entirely.
+
+If your workload only used ~**2 Gb/s** during inference, that’s:
+
+* ~0.25 GB/s
+* ~**2% of a 100 Gb/s link**
+* ~**1% of a 200 Gb/s link**
+  So for TP=2 inference, your conclusion “it’s enough” is numerically solid.
+
+---
+
+## 5) If you want ~200 Gb/s *in NCCL* instead of ib_write_bw, try these two paths (in order)
+
+### Path A: Use the official Spark NCCL build path (most promising)
+
+NVIDIA’s own “NCCL for Two Sparks” playbook tells you to build NCCL **v2.28.9-1** with Blackwell support and then run tests. ([build.nvidia.com][5])
+
+It also explicitly notes:
+
+* **One QSFP cable can hit full bandwidth**
+* With **two QSFP cables**, you must assign IPs to **all four** interfaces to get full bandwidth ([build.nvidia.com][5])
+
+If you’re inside an NGC container that bundles a different NCCL / plugin stack, this is the cleanest way to “get onto the known-good path.”
+
+### Path B: Stay in your container, but disable the “bad” pieces (plugin + dmabuf + C2C override)
+
+Try forcing NCCL to avoid the exact mechanism that’s killing you:
+
+```bash
+# 1) Disable external net plugins (common culprit in containers)
+export NCCL_NET_PLUGIN=none
+
+# 2) Disable dma-buf registration explicitly
+export NCCL_DMABUF_ENABLE=0
+
+# 3) Hard-disable GPU Direct RDMA
+export NCCL_NET_GDR_LEVEL=LOC
+
+# 4) IMPORTANT on C2C platforms: stop the C2C override from re-enabling it
+export NCCL_NET_GDR_C2C=0
+
+# 5) Now attempt IB again
+export NCCL_NET=IB
+
+# Debug visibility
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,ENV,NET,REG
+```
+
+Why this combo is rational:
+
+* `NCCL_NET_PLUGIN=none` stops NCCL from auto-loading `libnccl-net.so` style plugins. ([NVIDIA Docs][4])
+* `NCCL_DMABUF_ENABLE=0` prevents the specific DMABUF path your logs show. ([NVIDIA Docs][4])
+* `NCCL_NET_GDR_C2C` **explicitly overrides** `NCCL_NET_GDR_LEVEL` on CPU-attached NIC + C2C systems, and defaults to **1** since 2.27. If you didn’t set this, you may have been “disabling GDR” while NCCL re-enabled it via this override. ([NVIDIA Docs][4])
+
+If this works, you should see logs more like:
+
+* “GPU Direct RDMA Disabled …”
+  …and **no crash**, potentially near your **~190 Gb/s** RDMA baseline.
+
+If it still crashes, then yeah: your container’s NCCL stack is fundamentally incompatible with IB on Spark and your `NCCL_NET=Socket` workaround is the pragmatic move.
+
+---
+
+## 6) If you remain on Socket, you might be able to exceed your ~100 Gb/s “cap” with tuning
+
+NCCL socket transport has explicit tuning knobs:
+
+* `NCCL_SOCKET_IFNAME` can include multiple interfaces (comma-separated), exact-match with `=`. ([NVIDIA Docs][4])
+* `NCCL_SOCKET_NTHREADS` (1–16) and `NCCL_NSOCKS_PERTHREAD` can increase throughput; NCCL even says for “generic 100G networks” you can try **4** and **4**, with the constraint that the product ≤ **64**. ([NVIDIA Docs][4])
+
+Example:
+
+```bash
+export NCCL_NET=Socket
+export NCCL_SOCKET_IFNAME="=enp1s0f0np0,enp1s0f1np1"   # adapt to your names
+export NCCL_SOCKET_NTHREADS=4
+export NCCL_NSOCKS_PERTHREAD=4
+```
+
+Will this get you to 200 Gb/s? Maybe, maybe not — sockets become **CPU-bound** quickly — but it’s the only lever set NCCL gives you on that path.
+
+---
+
+## 7) Concrete edits to your report (so it’s maximally accurate)
+
+If you want that writeup to hold up under scrutiny, I’d change three lines:
+
+1. Replace
+   “GPUDirect is required for NCCL’s IB mode”
+   with
+   “In our NGC container stack, the selected NCCL net/IB implementation enables DMABUF and crashes instead of staging.”
+
+2. Add a “things we didn’t try / next knobs” box:
+
+   * `NCCL_NET_PLUGIN=none` ([NVIDIA Docs][4])
+   * `NCCL_DMABUF_ENABLE=0` ([NVIDIA Docs][4])
+   * `NCCL_NET_GDR_C2C=0` ([NVIDIA Docs][4])
+
+3. Add the authoritative platform statement (NVIDIA forum quote summary):
+
+   * “GPUDirect RDMA not supported; dma-buf / nvidia-peermem don’t work on Spark.” ([NVIDIA Developer Forums][1])
+
+That makes the writeup both **technically correct** and **useful to someone trying to reproduce/fix**.
+
+---
+
+## Popular opinion vs my conclusion
+
+**Popular opinion (generic cluster lore):**
+“Use NCCL over IB/RoCE; if GDR isn’t available, disable it and NCCL will stage.”
+
+**My conclusion (what your data + NVIDIA docs/forums actually imply):**
+
+* The “disable GDR and stage” idea is *real* in NCCL, and Spark users have hit **~22 GB/s (~176 Gb/s)** with GDR disabled. ([NVIDIA Developer Forums][2])
+* Your crash is almost certainly a **specific plugin/dmabuf selection bug or mis-detection** in the container stack.
+* Your `NCCL_NET=Socket` workaround is correct for “make it work now,” but it’s **not the end of the road** if you want to reclaim ~200G inside NCCL.
+
+If you want, paste the exact NCCL version string from your container (`nccl-tests prints it at startup`) and the first ~30 lines of `NCCL_DEBUG=INFO` output — I can tell you whether you’re on internal IB vs IBext/plugin immediately, and which of the above levers is most likely to stick.
+
+[1]: https://forums.developer.nvidia.com/t/enabling-gpu-direct-rdma-for-dgx-spark-clustering/352051 "Enabling GPU Direct RDMA for DGX Spark Clustering - DGX Spark / GB10 - NVIDIA Developer Forums"
+[2]: https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077 "DGX Spark NCCL Test: 10GB/s not 200 Gbps=25 GB/s - DGX Spark / GB10 - NVIDIA Developer Forums"
+[3]: https://github.com/NVIDIA/nccl/issues/676?utm_source=chatgpt.com "Cannot disable IB or force NCCL to use Socket network on ..."
+[4]: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html "https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html"
+[5]: https://build.nvidia.com/spark/nccl/stacked-sparks "NCCL for Two Sparks | DGX Spark"
+[6]: https://docs.nvidia.com/deeplearning/nccl/archives/nccl_2243/user-guide/docs/env.html?utm_source=chatgpt.com "Environment Variables — NCCL 2.24.3 documentation"
+
+**TLDR**
+
+* You *can* try to make NCCL use both NICs in **socket mode** by listing both interfaces in `NCCL_SOCKET_IFNAME` (comma-separated, use `=` for exact names). NCCL’s docs explicitly support multi-interface selection. ([NVIDIA Docs][1])
+* Whether you’ll actually see traffic on both depends on **IP/routing** (multi-rail subnets make this easy; same-subnet usually needs policy routing or bonding).
+* If “IB mode fails because of GPUDirect”, try **IB + no GPUDirect** via `NCCL_NET_GDR_LEVEL=LOC` (forces GDR off). ([NVIDIA Docs][1])
+
+---
+
+## 1) The fastest “just try it” change (socket mode, both IFs)
+
+Right now you pinned to one IF. Instead, whitelist both interfaces explicitly:
+
+```bash
+export NCCL_SOCKET_IFNAME="=enp1s0f1np1,=enP2p1s0f1np1"
+```
+
+NCCL supports multiple prefixes separated by commas, and `=` forces exact interface-name matching (so you don’t accidentally match other `en*` interfaces). ([NVIDIA Docs][1])
+
+If your two IFs share a common prefix and you *want* prefix-matching, you can also do something like `enp1,enp2`—but exact match is safer.
+
+### Turn on logs so you can see what NCCL actually does
+
+```bash
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=NET,INIT
+```
+
+Then run your workload and watch for NCCL printing chosen interfaces / connections.
+
+### Watch per-interface traffic live
+
+```bash
+ip -s link show enp1s0f1np1
+ip -s link show enP2p1s0f1np1
+# or:
+sar -n DEV 1
+# or:
+ifstat -i enp1s0f1np1,enP2p1s0f1np1 1
+```
+
+---
+
+## 2) If only one interface still gets traffic: it’s usually routing/topology, not NCCL
+
+Even if NCCL *selects* both interfaces, the kernel can still send everything out one IF if your IP setup is “wrong” for multi-rail.
+
+### The clean setup (recommended): 2 subnets (“multi-rail”)
+
+Example:
+
+* Node A
+
+  * `enp1...` = `192.168.10.11/24`
+  * `enP2...` = `192.168.11.11/24`
+* Node B
+
+  * `enp1...` = `192.168.10.12/24`
+  * `enP2...` = `192.168.11.12/24`
+
+Now Linux has unambiguous routes: `192.168.10.0/24` via IF#1, `192.168.11.0/24` via IF#2.
+
+### The annoying setup (common): both NICs in the same subnet
+
+If both NICs are in the same subnet, Linux routing often picks **one** egress device for that destination prefix. Then your “second rail” never gets used unless you do **policy-based routing** (source routing), or you use **bonding** (next section).
+
+---
+
+## 3) OS-level approach: bond the two ports and point NCCL at the bond
+
+If your switch supports it, an LACP bond is the “make it the network’s problem” solution.
+
+Key reality check:
+
+* A *single* TCP flow usually won’t exceed *one* physical link in LACP (hashing).
+* NCCL typically uses multiple connections/sockets, so it *can* spread across links—*especially* if you increase sockets/threads. (See tuning below.)
+
+On Ubuntu with netplan, a sketch:
+
+```yaml
+network:
+  version: 2
+  bonds:
+    bond0:
+      interfaces: [enp1s0f1np1, enP2p1s0f1np1]
+      addresses: [10.10.0.11/24]
+      parameters:
+        mode: 802.3ad
+        lacp-rate: fast
+        transmit-hash-policy: layer3+4
+        mii-monitor-interval: 100
+```
+
+Then:
+
+```bash
+export NCCL_SOCKET_IFNAME="=bond0"
+```
+
+This can be the most reliable way to “use both” if you don’t want multi-subnet routing complexity.
+
+---
+
+## 4) Socket transport tuning (only if you’re chasing bandwidth)
+
+If you actually want to push towards 100G+ with socket transport, NCCL exposes knobs. NCCL docs explicitly note that for “generic 100G networks” you can set both to 4, with the constraint that the product can’t exceed 64. ([NVIDIA Docs][1])
+
+```bash
+export NCCL_SOCKET_NTHREADS=4
+export NCCL_NSOCKS_PERTHREAD=4
+```
+
+These are per-connection helpers; they can increase CPU usage. ([NVIDIA Docs][1])
+
+Given you measured ~2 Gb/s, this is likely pointless for your real workload—but it’s useful for a bandwidth validation test (e.g., `nccl-tests`).
+
+---
+
+## 5) If you want “both ports” via IB/RDMA but GPUDirect is breaking it
+
+If your IB transport is failing specifically because NCCL is trying to use GPUDirect RDMA, you can force GPUDirect off:
+
+```bash
+export NCCL_NET_GDR_LEVEL=LOC
+```
+
+`LOC` = “Never use GPU Direct RDMA (always disabled)” per NCCL docs. ([NVIDIA Docs][1])
+
+This can let you still use the IB/RoCE transport path while staging through host memory (performance may still be better than pure TCP, depending on your setup).
+
+---
+
+## 6) One more NCCL knob you should set consciously when using multiple NICs: `NCCL_CROSS_NIC`
+
+This controls whether NCCL allows rings/trees to use different NICs across nodes. ([NVIDIA Docs][1])
+
+* If each NIC is a separate “rail” / separate switch → start with:
+
+  ```bash
+  export NCCL_CROSS_NIC=0
+  ```
+* If both NICs go to the same switch/fabric and rails don’t matter →:
+
+  ```bash
+  export NCCL_CROSS_NIC=1
+  ```
+
+Default is `2` (try to match rails but allow crossing if beneficial). ([NVIDIA Docs][1])
+
+---
+
+## My conclusion vs the “popular assumption”
+
+* **Conclusion:** You don’t *necessarily* need IB mode or MPTCP to get NCCL to touch multiple NICs. NCCL supports selecting multiple socket interfaces directly (`NCCL_SOCKET_IFNAME` with comma-separated list) and can use all matching interfaces. ([NVIDIA Docs][1])
+* **Popular assumption:** “Socket mode = one NIC only; to use both you need bonding/MPTCP.” That’s only true if your IP/routing setup effectively forces one interface, or you’re thinking of *a single TCP flow* needing per-packet multipath.
+
+If you want, I can give you a minimal “2-node verification recipe” (exact `nccl-tests` command + what to look for in NCCL logs) tailored to how many GPUs/ranks you’re running—but the configuration above is the core of “try using both interfaces” without overcomplicating it.
+
+[1]: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html "Environment Variables — NCCL 2.29.1 documentation"
+
+
+
+
+**TLDR**
+
+* Your “IB works in single-node but not in multi-node vLLM” outcome is exactly what I’d expect given Ray’s env model + container device isolation.
+* You **don’t need “deep vLLM/Ray integration”** to get multi-node vLLM using **NET/IB with GDR disabled**. You mostly need to:
+
+  1. pass `/dev/infiniband` + memlock into the containers, and
+  2. ensure the NCCL env vars exist **when `ray start` runs** on *every node* (not later in a `docker exec` shell / driver). ([NVIDIA Docs][1])
+* If you’re only seeing ~2 Gb/s (~0.25 GB/s) in production serving, chasing 22 GB/s RDMA numbers is mostly “feel-good benchmarking,” not a real bottleneck fix.
+
+---
+
+## What’s actually going on (and why your failures make sense)
+
+### 1) `/dev/infiniband/*` missing in containers
+
+That’s normal unless you explicitly pass the devices through (or use `--privileged`). NVIDIA’s own container guidance for RDMA-class networking commonly uses `--device=/dev/infiniband` plus `--ulimit memlock=-1`. ([NVIDIA Docs][1])
+
+### 2) Ray “GPU detection broke” when you wrapped things
+
+Ray GPU detection issues usually come from the container not *really* having GPUs (missing `--gpus all` / wrong runtime) or from clobbering key env (e.g., `CUDA_VISIBLE_DEVICES`, `NVIDIA_VISIBLE_DEVICES`) in a wrapper.
+
+The clean rule: **never “export” inside a shell wrapper to inject cluster-wide env**. Pass env via Docker `-e …` so Ray starts with it, and avoid fragile quoting.
+
+### 3) “Env vars don’t reach Ray workers”
+
+This is not a bug; it’s Ray’s design. Env vars set on the driver / your interactive shell **aren’t automatically propagated** to workers. Ray’s own docs call this out and recommend using **runtime environments** (`runtime_env={"env_vars": {...}}`) when you need propagation. ([Ray][2])
+
+For **vLLM multi-node**, the vLLM docs explicitly recommend setting env vars **during cluster creation** (their `run_cluster.sh`), because that’s what actually propagates to all nodes/processes. ([vLLM][3])
+
+---
+
+## The simplest path to “vLLM multi-node + NCCL IB (GDR off)” without code changes
+
+### Step A — Start Ray containers with RDMA devices and memlock (no `--privileged`)
+
+vLLM’s `examples/online_serving/run_cluster.sh` already forwards arbitrary Docker args you pass (including `-e ...`, `--device ...`, `--ulimit ...`). ([GitHub][4])
+
+On **each node**, use `run_cluster.sh` but add:
+
+* `--device=/dev/infiniband` (or individual uverbs devices)
+* `--ulimit memlock=-1`
+* (optional but often needed) `--cap-add=IPC_LOCK`
+* Your NCCL RDMA env vars as `-e ...`
+
+NVIDIA’s doc example explicitly calls out `--device=/dev/infiniband` and `--ulimit memlock=-1`. ([NVIDIA Docs][1])
+vLLM community guidance also mentions adding `IPC_LOCK` and ensuring `/dev/shm` is available for distributed runs. ([vLLM Forums][5])
+
+**Head node:**
+
+```bash
+bash run_cluster.sh \
+  vllm/vllm-openai \
+  192.168.102.11 \
+  --head \
+  /abs/path/to/hf_cache \
+  --device=/dev/infiniband \
+  --ulimit memlock=-1 \
+  --cap-add=IPC_LOCK \
+  -e VLLM_HOST_IP=192.168.102.11 \
+  -e NCCL_IB_DISABLE=0 \
+  -e NCCL_NET_GDR_LEVEL=LOC \
+  -e NCCL_NET_GDR_C2C=0 \
+  -e NCCL_DMABUF_ENABLE=0 \
+  -e NCCL_NET_PLUGIN=none \
+  -e NCCL_DEBUG=INFO \
+  -e NCCL_DEBUG_SUBSYS=NET,INIT
+```
+
+**Worker node (example worker IP 192.168.102.12):**
+
+```bash
+bash run_cluster.sh \
+  vllm/vllm-openai \
+  192.168.102.11 \
+  --worker \
+  /abs/path/to/hf_cache \
+  --device=/dev/infiniband \
+  --ulimit memlock=-1 \
+  --cap-add=IPC_LOCK \
+  -e VLLM_HOST_IP=192.168.102.12 \
+  -e NCCL_IB_DISABLE=0 \
+  -e NCCL_NET_GDR_LEVEL=LOC \
+  -e NCCL_NET_GDR_C2C=0 \
+  -e NCCL_DMABUF_ENABLE=0 \
+  -e NCCL_NET_PLUGIN=none \
+  -e NCCL_DEBUG=INFO \
+  -e NCCL_DEBUG_SUBSYS=NET,INIT
+```
+
+Why this works:
+
+* Those env vars exist **when `ray start` runs** in the container, so Ray worker processes inherit them (this is exactly what vLLM warns about). ([vLLM][3])
+
+---
+
+## If you want to use both “halves” in IB mode: set `NCCL_IB_HCA` correctly
+
+For multi-rail / multi-port IB (or RoCE), you usually need to include both HCAs/ports in `NCCL_IB_HCA`. NCCL supports comma-separated selection, port selection with `:`, and `=` for exact names. ([NVIDIA Docs][6])
+
+1. Map devices:
+
+```bash
+ibdev2netdev
+# or: rdma link show
+```
+
+2. Then set something like:
+
+```bash
+-e NCCL_IB_HCA="=mlx5_0:1,mlx5_1:1"
+```
+
+(Use your actual device names/ports from `ibdev2netdev`.)
+
+---
+
+## How to verify you’re actually on NET/IB (with GDR disabled)
+
+Inside the head container (or wherever you run `vllm serve`), set:
+
+```bash
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=NET,INIT
+```
+
+Then look for logs indicating `NET/IB` and that GDR is disabled (you already saw the pattern in your single-node test). If you want “belt and suspenders,” temporarily crank to `TRACE` for one run.
+
+---
+
+## One correction to your conclusion
+
+You wrote: “vLLM multi-node requires Socket due to Ray env propagation complexity.”
+
+It’s only “complex” if you try to set NCCL env vars *after* the Ray cluster is already started (e.g., in a `docker exec` shell or only in the driver). Ray explicitly doesn’t propagate driver env vars to workers unless you use runtime_env. ([Ray][2])
+vLLM explicitly tells you to set env vars at cluster creation (run_cluster.sh) for this reason. ([vLLM][3])
+
+So: **IB is achievable without touching vLLM source**. It’s mostly “start the cluster correctly.”
+
+---
+
+## Should you bother, given ~2 Gb/s real traffic?
+
+Tell-it-like-it-is: probably not right now.
+
+* Your serving run is using **~2 Gb/s ≈ 0.25 GB/s**.
+* Even a single 100G NIC gives **~12.5 GB/s theoretical**, i.e. **~50× headroom**.
+* Yes, your benchmark table says **RDMA (GDR off) ~22 GB/s** vs socket **4–6 GB/s**; that’s a *real* transport difference. But it’s irrelevant unless your workload’s communication grows by ~20–80×.
+
+Forward-looking rule: only pay the RDMA complexity tax if you expect one of these soon:
+
+* more nodes (2 → 4 → 8+) with heavy TP/PP,
+* smaller/faster kernels where comm dominates,
+* you’re chasing latency jitter / tail latency at high QPS,
+* you want to run other workloads where comm is the bottleneck.
+
+If not, keep socket mode, document the “known-good RDMA recipe” above, and move on.
+
+If you want, I can also rewrite your CLAUDE.md snippet into a tighter “decision log” that makes the Ray/env nuance explicit and avoids the slightly-too-pessimistic “needs deep integration” framing.
+
+[1]: https://docs.nvidia.com/networking/display/xliov360/setting-up-xlio-within-a-docker-container?utm_source=chatgpt.com "Setting Up XLIO Within a Docker Container"
+[2]: https://docs.ray.io/en/latest/ray-observability/user-guides/debug-apps/general-debugging.html "Common Issues — Ray 2.53.0"
+[3]: https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/ "Troubleshooting distributed deployments - vLLM"
+[4]: https://raw.githubusercontent.com/vllm-project/vllm/main/examples/online_serving/run_cluster.sh "raw.githubusercontent.com"
+[5]: https://discuss.vllm.ai/t/deploying-multi-node-llm-with-infiband-roce/1344 "Deploying multi-node LLM with infiband/ROCE - General - vLLM Forums"
+[6]: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html?utm_source=chatgpt.com "Environment Variables — NCCL 2.29.1 documentation"
+
+### **TLDR**
+
+* Yes—**for interactive chat, the network mostly shows up as *token-to-token latency*** (TPOT), not peak bandwidth.
+* But with your observed **~2 Gb/s** real traffic, you’re **nowhere near** even a single 100G port’s bandwidth ceiling, so **RDMA + 200G won’t magically double throughput**. Expect **single‑digit to low‑teens % improvement** in decode latency/throughput *at best* (bigger gains only if you’re actually comm‑bound).
+* A real-world anchor: someone running **Qwen3‑VL‑235B‑A22B AWQ on a 2‑node DGX Spark cluster reports ~25 tokens/s** generation throughput. ([NVIDIA Developer Forums][1])
+* “Proper” dual‑port RoCE/NCCL on Spark can hit **~26.9 GB/s NCCL bus bandwidth (~215 Gb/s)** in benchmarks, i.e. the fabric can be *very* fast when you’re driving it. ([LinkedIn][2])
+* Ballpark (educated) expectation for **your current sockets/1×100G vs RDMA/200G**:
+
+  * **Batch 1 decode:** ~**25 tok/s → ~28–30 tok/s**
+  * **Prefill/encode:** changes are usually smaller (often **~0–10%**), unless you’re doing very heavy multi-node prefill.
+
+---
+
+## What “latency vs bandwidth” means for Qwen‑235B inference
+
+Think in two phases:
+
+### 1) Encode / prefill (processing the prompt)
+
+* Big matmuls, often **compute‑heavy**.
+* Network can matter if you’re doing **multi-node tensor-parallel** and the implementation forces big cross-node collectives during prefill.
+* But if your measured traffic is ~2 Gb/s, **you’re not bandwidth-limited**; RDMA might shave a bit of overhead, but it’s not a night-and-day change.
+
+### 2) Decode (generating tokens)
+
+* **Every token step** tends to require **synchronization/collectives** across tensor-parallel ranks.
+* That makes **latency** more relevant: even tiny per-collective overhead gets multiplied by “number of collectives per token”.
+* Evidence that latency matters: in dual-Spark llama.cpp RPC testing, the author explicitly notes TCP/IP stack latency as a limiter and references **~1–2 µs RDMA latency** (`ib_send_lat`). ([GitHub][3])
+
+So yes: **if you care about interactive feel (TPOT), RDMA helps more than extra raw bandwidth**.
+
+---
+
+## Baseline reality check: what people actually see on similar setups
+
+### “Current-ish” throughput on dual Spark / multi-node setups
+
+* **~25 tokens/sec** reported for **Qwen3‑VL‑235B‑A22B Instruct AWQ on a 2‑node cluster in vLLM**. ([NVIDIA Developer Forums][1])
+* For a different stack (llama.cpp RPC, Q4_K), measured **token generation ~12.98 tok/s**, and it **drops with longer context** (down to ~8 tok/s at 32K). ([GitHub][3])
+
+This wide spread is normal: engine + quantization + scheduling dominate.
+
+### “Proper RDMA 200G” capability on Spark
+
+* Dual‑port RoCE/NCCL tests show traffic can be balanced and NCCL can reach **~26.9 GB/s bus bandwidth (~215 Gb/s)** under the right settings. ([LinkedIn][2])
+  So the network *can* be fast—question is whether **your inference workload actually hits that wall**. Your ~2 Gb/s observation says “no”.
+
+---
+
+## Educated guesses: encode + decode vs batch size (Socket/100G vs RDMA/200G)
+
+I’m going to assume the scenario you’ve been describing:
+
+* **2 nodes, tensor-parallel across nodes**, Qwen3‑VL‑235B‑A22B (AWQ-ish), vLLM-style serving
+* “Batch size” = concurrent sequences being decoded together (what vLLM effectively batches)
+* Context ~4K-ish (not 32K); at 32K, decode will be noticeably slower regardless (attention/KV cost) ([GitHub][3])
+
+These numbers are *not* gospel—they’re meant to be **plausible** and **directionally correct** given (a) your traffic is tiny vs link capacity and (b) decode is latency sensitive.
+
+### Table: estimated throughput + per-seq token latency
+
+**Decode throughput = output tokens/sec.**
+**Prefill throughput = input tokens/sec.**
+Per-seq token latency ≈ `1000 * batch / total_decode_tps` ms.
+
+| Batch (seqs) | Socket 1×100G Prefill t/s | Socket Decode t/s (total) | Socket ms/token per seq | RDMA 200G Prefill t/s | RDMA Decode t/s (total) | RDMA ms/token per seq |
+| -----------: | ------------------------: | ------------------------: | ----------------------: | --------------------: | ----------------------: | --------------------: |
+|            1 |                      ~400 |                   **~25** |                  ~40 ms |                  ~420 |                 **~29** |                ~34 ms |
+|            2 |                      ~700 |                       ~45 |                  ~44 ms |                  ~735 |                     ~50 |                ~40 ms |
+|            4 |                     ~1200 |                       ~80 |                  ~50 ms |                 ~1300 |                     ~86 |                ~47 ms |
+|            8 |                     ~1800 |                      ~130 |                  ~62 ms |                 ~1950 |                    ~137 |                ~58 ms |
+|           16 |                     ~2500 |                      ~200 |                  ~80 ms |                 ~2700 |                    ~206 |                ~78 ms |
+
+**How to read this:**
+
+* **Throughput goes up with batch**, but **interactive latency per user usually gets worse** (ms/token rises).
+* **RDMA helps most at small batch** (latency-dominated), and becomes marginal at larger batch (compute-dominated).
+* The anchor point (**~25 tok/s at low concurrency**) is consistent with a reported dual-node vLLM AWQ result. ([NVIDIA Developer Forums][1])
+* The “RDMA can help but not 10×” stance is consistent with the fact that Spark RoCE can be extremely fast in NCCL microbenchmarks, but your workload isn’t pushing bandwidth. ([LinkedIn][2])
+
+**Expected deltas (rule of thumb):**
+
+* **Batch 1 decode:** +10–20% is plausible
+* **Batch 8+ decode:** +0–5% is plausible
+* **Prefill:** often +0–10% unless your prefill is unusually communication-heavy
+
+---
+
+## Popular opinion vs my conclusion
+
+* **Popular opinion:** “Multi-node tensor-parallel LLM inference *needs* RDMA; TCP sockets are too slow.”
+* **My conclusion:** RDMA is *nice*, but in your observed regime (**~2 Gb/s traffic**), **you are not bandwidth-limited**, so the *only* meaningful gain is **lower collective latency/jitter**, which typically yields **modest** improvements (single digits to low teens) in **decode TPOT**, not a dramatic throughput jump.
+
+---
+
+## If you want real numbers in 10 minutes (and stop guessing)
+
+Run two controlled microbenchmarks and record **prefill** + **decode** separately:
+
+1. **Fix prompt+output lengths** (example: input 1024, output 256)
+2. Sweep **batch size** (1,2,4,8,16)
+3. Compare:
+
+* **Socket path**: `NCCL_IB_DISABLE=1`
+* **RDMA path**: `NCCL_IB_DISABLE=0` plus your IB/GDR-off settings
+
+Also: NCCL *can* be configured to consider multiple NICs (comma-separated selection and multi-NIC behavior controls exist). ([NVIDIA Docs][4]) But whether you’ll see both links used for *your* pattern (especially with 1 GPU/node) is a separate practical question.
+
+If you paste your vLLM `Avg prompt throughput` / `Avg generation throughput` logs for a single controlled run (with known batch and fixed lengths), I can replace the guessed table with a tighter estimate that matches your exact setup.
+
+[1]: https://forums.developer.nvidia.com/t/question-on-inference-performance-results-of-qwen3-235b-a22b-on-2x-dgx-spark/355053?utm_source=chatgpt.com "Question on Inference Performance Results of Qwen3 ..."
+[2]: https://www.linkedin.com/pulse/connecting-two-sparks-andrew-myers-p9gme "https://www.linkedin.com/pulse/connecting-two-sparks-andrew-myers-p9gme"
+[3]: https://github.com/ggml-org/llama.cpp/discussions/16578 "Performance of llama.cpp on NVIDIA DGX Spark · ggml-org llama.cpp · Discussion #16578 · GitHub"
+[4]: https://docs.nvidia.com/deeplearning/nccl/archives/nccl_2234/user-guide/docs/env.html "https://docs.nvidia.com/deeplearning/nccl/archives/nccl_2234/user-guide/docs/env.html"
+
+**TLDR**
+
+* Yes: for TP=2 inference, this is mostly a **latency** problem (many small-ish collectives), not a bandwidth problem. **RDMA helps a lot** because it cuts software/CPU overhead and tail latency; **100G → 200G dual‑rail usually helps very little** unless you push big decode batches or very long prompt-prefill.
+* Real baseline numbers people see on **2× DGX Spark** for **Qwen3‑VL‑235B AWQ in vLLM** are ~**25–26 tok/s** (low concurrency) over **NCCL/RDMA**. ([NVIDIA Developer Forums][1])
+* Your measured ratio (**242 vs 167 tok/s**, +45%) is exactly the kind of win you get from **Socket → RDMA** when you’re latency-bound. Expect **single‑rail 100G RDMA vs “true” 200G RDMA** to be more like **0–10%** for decode latency, not 2×.
+* If you still want NCCL to use both RoCE “halves”: **stop inferring it from `ip -s link` deltas** and force/prove it with NCCL logs: `NCCL_DEBUG_FILE=/tmp/nccl.%h.%p.log` + `NCCL_NETDEVS_POLICY=ALL` (or `MAX:2`) + exact `NCCL_IB_HCA`. ([NVIDIA Docs][2])
+
+---
+
+## Latency vs bandwidth: what changes between Socket, 100G RDMA, and 200G RDMA
+
+For **TP=2**, every generated token triggers a bunch of collectives. The per‑collective message sizes are often *not huge*, so:
+
+* **Socket transport**: higher per‑collective overhead → worse token latency.
+* **RDMA (even with GDR off)**: lower overhead → *much* better token latency (your +45% matches this pattern).
+* **Dual‑rail 200G**: mostly increases peak bandwidth; it doesn’t magically cut per‑collective fixed costs. So it tends to help **throughput-at-large-batch** more than **latency-at-batch=1**.
+
+Popular “folk wisdom” here is basically right: **people overestimate bandwidth and underestimate latency** for TP inference.
+
+---
+
+## Throughput numbers you can actually anchor on (public + yours)
+
+### Public datapoints (DGX Spark / 2 nodes)
+
+* **vLLM + NCCL/RDMA, TP=2**: community-reported decode throughput for **Qwen3‑VL‑235B** is about **~25–26 tok/s** (cluster, low concurrency). ([NVIDIA Developer Forums][1])
+* **TensorRT‑LLM NVFP4 (Qwen3‑235B, not VL)**: NVIDIA’s published bench shows **prompt/prefill ~23,477 tok/s** and **decode ~11.73 tok/s** at **ISL=2048, OSL=128, BS=1** on **dual DGX Spark**. ([NVIDIA Developer][3])
+  (Different engine + different model variant, but it’s a useful “shape of reality”: prefill can be *orders* faster than decode.)
+
+### Your datapoint (most useful for *your* stack)
+
+* **Socket vs RDMA**: **167 → 242 tok/s** (≈**1.45×**).
+  That ratio is exactly what you’d expect when comm is latency‑dominated and RDMA removes a big chunk of overhead.
+
+---
+
+## Educated decode estimates by batch size (your current vs “proper” 200G)
+
+I’m going to interpret “batch size” the way vLLM people usually mean it operationally: **effective decode batch / number of sequences decoded per step** (often driven by concurrency / scheduler). Total tok/s goes up, but **per‑request latency can get worse**.
+
+Below is a *calibrated guess* that matches:
+
+* public “batch≈1” reality (~26 tok/s RDMA) ([NVIDIA Developer Forums][1])
+* your “bigger batch” observation (~242 tok/s RDMA)
+
+### Decode throughput (total tok/s across all sequences)
+
+| Batch (decode) | Socket ~1×100G total tok/s | RDMA ~1×100G total tok/s | RDMA dual‑rail ~2×100G total tok/s (range) |
+| -------------: | -------------------------: | -----------------------: | -----------------------------------------: |
+|              1 |                      ~17.9 |                    ~26.0 |                                 ~26.0–26.8 |
+|              2 |                      ~31.3 |                    ~45.4 |                                 ~45.9–47.2 |
+|              4 |                      ~54.7 |                    ~79.3 |                                 ~80.9–84.1 |
+|              8 |                      ~95.6 |                   ~138.5 |                               ~142.7–149.6 |
+|             16 |    **167** *(your Socket)* |    **242** *(your RDMA)* |                                   ~254–266 |
+
+**What this means for latency (per sequence):**
+Total tok/s is *not* the latency metric. Per‑sequence decode rate ≈ (total tok/s) / (batch).
+
+Examples (approx):
+
+* **Batch=1**
+
+  * Socket: 17.9 tok/s ⇒ **~56 ms/token**
+  * RDMA: 26 tok/s ⇒ **~38 ms/token**
+* **Batch=16**
+
+  * Socket: 167/16=10.4 tok/s ⇒ **~96 ms/token**
+  * RDMA: 242/16=15.1 tok/s ⇒ **~66 ms/token**
+
+So if you crank batch/concurrency for throughput, don’t be surprised if interactive latency gets worse even though “tok/s” looks better.
+
+### Why 200G dual‑rail barely moves decode at batch=1
+
+Even if dual‑rail doubles bandwidth, you’re not bandwidth-limited in decode at low batch; you’re paying a lot of fixed per-collective cost. So you typically see **single-digit %** changes, unless you deliberately push large decode batches.
+
+---
+
+## Prefill (encode) speed: what to expect
+
+Prefill depends brutally on:
+
+* prompt length (ISL),
+* how many sequences you batch,
+* attention kernel quality,
+* whether you’re doing vision encoder work,
+* quant type (AWQ vs NVFP4).
+
+Hard datapoint you can cite:
+
+* TRT‑LLM NVFP4 on dual Sparks (Qwen3‑235B): **~23,477 prompt tok/s** at **ISL=2048, BS=1**. ([NVIDIA Developer][3])
+  That implies ~**87 ms** to encode a 2048‑token prompt (2048 / 23477).
+
+For **vLLM + AWQ**, I would expect **lower** prefill tok/s than TRT‑LLM for the same setup (engine matters), but still “high enough” that **decode dominates end‑to‑end latency** for typical chat prompts. The network mode (100G vs 200G) tends to matter **more for prefill at high batch / long prompts** than for decode-at-batch=1.
+
+---
+
+## Your NCCL dual‑NIC questions (1–10)
+
+### 1) “TP=2 = 1 connection = 1 NIC?”
+
+Not strictly. NCCL can use **multiple HCAs even for 2 ranks** by mapping different **channels** to different rails. There’s a DGX Spark example showing channels going via **NET/IB/0** and **NET/IB/1** in the NCCL logs (same 2‑node pattern you have). ([NVIDIA Developer Forums][4])
+So your hypothesis is plausible as a *default heuristic*, but it’s not a hard rule.
+
+### 2) `NCCL_IB_HCA` format + “omit :1?”
+
+Your syntax is basically fine:
+
+* `NCCL_IB_HCA` accepts a **comma-separated list** of HCAs, and you can specify a port with `:port`. ([NVIDIA Docs][2])
+* The doc also recommends using a leading `=` **in the value** to force *exact* matching (avoid prefix accidents): e.g. `=mlx5_0:1,mlx5_1:1`. ([NVIDIA Docs][2])
+
+So for you, I’d do:
+
+```bash
+export NCCL_IB_HCA="=rocep1s0f1:1,roceP2p1s0f1:1"
+```
+
+Omitting `:1` usually just means “all ports”; if each device only has port 1, it won’t change much.
+
+### 3) `NCCL_IB_SPLIT_DATA_ON_QPS` to distribute across both NICs?
+
+This knob is about **how data is split across multiple QPs** *once you already have multiple QPs*, controlled by `NCCL_IB_QPS_PER_CONNECTION`. ([NVIDIA Docs][2])
+It’s **not** the primary “use both NICs” switch.
+
+Also: NCCL explicitly warns that setting `NCCL_IB_SPLIT_DATA_ON_QPS=1` (splitting each message across QPs) can cause **visible latency degradation** when using many QPs. ([NVIDIA Docs][2])
+Given you care about latency, I would *not* reach for this first.
+
+### 4) Different subnets (192.168.100.x vs 192.168.101.x): problem?
+
+For RoCE multi‑rail this is generally fine *as long as both nodes have connectivity on both subnets*. NCCL is selecting IB devices/ports; the IP subnet split is not inherently disqualifying.
+
+### 5) `NCCL_ALGO` (Ring/Tree) affecting NIC selection?
+
+For **2 ranks**, Ring vs Tree is basically a degenerate case; it’s not going to be the lever that suddenly makes 2 rails appear. It can change micro-behavior, but if you’re seeing “only one rail”, fix device selection first.
+
+### 6) Where do NCCL logs go in vLLM/Ray?
+
+Two practical points:
+
+1. NCCL logs go to **stdout/stderr by default**, and Ray often captures/redirects worker output.
+2. Use `NCCL_DEBUG_FILE` and write per‑process logs to disk. NCCL supports `%h` (hostname) and `%p` (PID) in the filename. ([NVIDIA Docs][2])
+
+Example:
+
+```bash
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,NET
+export NCCL_DEBUG_FILE=/tmp/nccl.%h.%p.log
+```
+
+Then look in Ray’s log tree (commonly `/tmp/ray/session_latest/...`). ([Ray][5])
+
+### 7) “Latency benefit” from dual‑NIC even at 2–5 Gb/s?
+
+Usually **no**, or it’s lost in noise.
+
+* Dual‑rail mainly improves bandwidth and reduces queueing under load.
+* When you’re far from saturating 100G, you’re dominated by per‑collective overhead.
+* Aggressive QP splitting can even **hurt latency** (NCCL warns about this). ([NVIDIA Docs][2])
+
+### 8) ConnectX‑7 multi‑host mode: known NCCL multi‑rail issues?
+
+On DGX Spark specifically, there’s evidence NCCL can use both `rocep1s0f1` and `roceP2p1s0f1` rails (channels mapped across both in logs). ([NVIDIA Developer Forums][4])
+So I wouldn’t blame “multi‑host mode” as the first culprit.
+
+### 9) Does vLLM/Ray prevent NCCL multi‑NIC?
+
+Not conceptually. The real foot-gun is **env propagation** into Ray worker processes (which you already hit earlier). If the workers don’t see the same NCCL env, they’ll silently do something else.
+
+### 10) Is single‑NIC usage “expected” for 2‑node TP?
+
+It’s *common* with defaults/heuristics, but not inevitable. NCCL can use both rails; you just need to **force/verify** selection and make sure the env reaches the right processes.
+
+---
+
+## The “do this, not vibes” recipe to force dual‑rail and prove it
+
+### 1) Force NCCL to *consider* both rails and log to files
+
+```bash
+# pick rails
+export NCCL_IB_HCA="=rocep1s0f1:1,roceP2p1s0f1:1"
+export NCCL_CROSS_NIC=0              # avoid cross-rail weirdness :contentReference[oaicite:15]{index=15}
+
+# force NCCL to use multiple net devices per GPU
+export NCCL_NETDEVS_POLICY=ALL       # or MAX:2 :contentReference[oaicite:16]{index=16}
+
+# logging you can actually find under Ray
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,NET
+export NCCL_DEBUG_FILE=/tmp/nccl.%h.%p.log   # %h host, %p pid :contentReference[oaicite:17]{index=17}
+```
+
+### 2) Don’t accidentally pin Socket selection to one interface (if you ever fall back)
+
+`NCCL_SOCKET_IFNAME` supports **multiple interfaces** (comma-separated) and exact matching with `=`. ([NVIDIA Docs][2])
+So if you keep it at all, prefer:
+
+```bash
+export NCCL_SOCKET_IFNAME="=enp1s0f1np1,enP2p1s0f1np1"
+```
+
+(Or unset it entirely while testing IB behavior, to avoid self-inflicted constraints.)
+
+### 3) Verify via NCCL logs, not `ip -s link`
+
+In the NCCL logs you want to see lines like:
+
+* `NET/IB : Using [0]rocep1s0f1:1/... [1]roceP2p1s0f1:1/...`
+* channel mappings across `NET/IB/0` and `NET/IB/1`
+  …like the DGX Spark example does. ([NVIDIA Developer Forums][4])
+
+---
+
+If you want one blunt “next step”: **try `NCCL_NETDEVS_POLICY=ALL` + `NCCL_DEBUG_FILE` and see if NCCL even *tries* to open both rails**. If it does, dual‑NIC is basically solved; if it doesn’t, the problem is still env‑propagation or device filtering (not “TP=2 can’t do it”).
+
+[1]: https://forums.developer.nvidia.com/t/how-to-run-glm-4-7-on-dual-dgx-sparks-with-vllm-mods-support-in-spark-vllm-docker/355603/16 "https://forums.developer.nvidia.com/t/how-to-run-glm-4-7-on-dual-dgx-sparks-with-vllm-mods-support-in-spark-vllm-docker/355603/16"
+[2]: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html "Environment Variables — NCCL 2.29.1 documentation"
+[3]: https://developer.nvidia.com/blog/how-nvidia-dgx-sparks-performance-enables-intensive-ai-tasks/ "https://developer.nvidia.com/blog/how-nvidia-dgx-sparks-performance-enables-intensive-ai-tasks/"
+[4]: https://forums.developer.nvidia.com/t/help-running-nvfp4-model-on-2x-dgx-spark-with-vllm-ray-multi-node/353723 "Help: Running NVFP4 model on 2x DGX Spark with vLLM + Ray (multi-node) - DGX Spark / GB10 - NVIDIA Developer Forums"
+[5]: https://discuss.ray.io/t/ray-log-location/10394 "https://discuss.ray.io/t/ray-log-location/10394"
+

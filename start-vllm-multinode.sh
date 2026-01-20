@@ -14,9 +14,8 @@ WORKER_IP="192.168.100.11"
 # NCCL IB with GDR disabled (host-staged RDMA for lower latency)
 ENV="-e NCCL_NET_PLUGIN=none -e NCCL_DMABUF_ENABLE=0"
 ENV="$ENV -e NCCL_NET_GDR_LEVEL=LOC -e NCCL_NET_GDR_C2C=0"
-ENV="$ENV -e NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'"  # Exact match both HCAs
-ENV="$ENV -e NCCL_CROSS_NIC=0 -e NCCL_NETDEVS_POLICY=ALL"  # Force dual-rail
-ENV="$ENV -e NCCL_SOCKET_IFNAME='=enp1s0f1np1,enP2p1s0f1np1'"  # Both interfaces
+ENV="$ENV -e NCCL_IB_HCA='=rocep1s0f1:1'"  # Single-rail (faster than dual with GDR off)
+ENV="$ENV -e NCCL_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e GLOO_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"

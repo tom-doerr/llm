@@ -123,8 +123,8 @@ docker run ... \
 
 **Latency matters:** RDMA's ~1-2μs latency (vs Socket ~1-2ms) helps tensor parallelism all-reduce ops.
 
-**Dual NIC:** With `NCCL_NETDEVS_POLICY=ALL`, NCCL uses both rails (16 channels alternate NET/IB/0 and NET/IB/1).
-Traffic splits ~50/50 under load. Performance unchanged (~240 tok/s) because we're **latency-bound, not bandwidth-bound**.
+**Single-rail is faster:** Dual-rail with GDR disabled adds CPU staging overhead → 20-37% slower.
+Use `NCCL_IB_HCA='=rocep1s0f1:1'` for best performance (~300 tok/s vs ~240 dual-rail).
 
 **Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [vLLM distributed troubleshooting](https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/), [Spark 22GB/s](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077)
 
