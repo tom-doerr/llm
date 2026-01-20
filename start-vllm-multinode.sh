@@ -11,17 +11,21 @@ CONTAINER="nvcr.io/nvidia/vllm:25.11-py3"
 OOB_IF="enp1s0f1np1"  # Control plane interface
 HEAD_IP="192.168.100.10"
 WORKER_IP="192.168.100.11"
-# Socket transport - NCCL IB requires env var propagation through Ray which is complex
-# See CLAUDE.md for NCCL IB setup (untested with vLLM)
-ENV="-e NCCL_NET=Socket -e NCCL_SOCKET_IFNAME=$OOB_IF"
+# NCCL IB with GDR disabled (host-staged RDMA for lower latency)
+ENV="-e NCCL_NET_PLUGIN=none -e NCCL_DMABUF_ENABLE=0"
+ENV="$ENV -e NCCL_NET_GDR_LEVEL=LOC -e NCCL_NET_GDR_C2C=0"
+ENV="$ENV -e NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'"  # Exact match both HCAs
+ENV="$ENV -e NCCL_CROSS_NIC=0 -e NCCL_NETDEVS_POLICY=ALL"  # Force dual-rail
+ENV="$ENV -e NCCL_SOCKET_IFNAME='=enp1s0f1np1,enP2p1s0f1np1'"  # Both interfaces
 ENV="$ENV -e GLOO_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
 # Note: VLLM_USE_RAY_COMPILED_DAG=0 doesn't work for multi-node - vLLM forces it to 1
 
 if [ "$DEBUG_NCCL" = "1" ]; then
-  ENV="$ENV -e NCCL_DEBUG=INFO -e NCCL_DEBUG_SUBSYS=INIT,NET,IB"
-  echo "NCCL debug enabled"
+  ENV="$ENV -e NCCL_DEBUG=INFO -e NCCL_DEBUG_SUBSYS=INIT,NET"
+  ENV="$ENV -e NCCL_DEBUG_FILE=/tmp/nccl.%h.%p.log"
+  echo "NCCL debug enabled (logs: /tmp/nccl.*.log)"
 fi
 
 ENV_HEAD="$ENV -e VLLM_HOST_IP=$HEAD_IP"
@@ -38,9 +42,11 @@ ssh spark-3 "docker rm -f vllm-worker 2>/dev/null || true"
 # ssh spark-2 "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'"
 # ssh spark-3 "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'"
 
+RDMA="--device=/dev/infiniband --ulimit memlock=-1 --cap-add=IPC_LOCK"
+
 echo "=== Starting Ray head on spark-2 ==="
 ssh spark-2 "docker run -d --name vllm-head --gpus all --shm-size 16g \\
-    --network host --ipc host $ENV_HEAD $VOLS $CONTAINER \\
+    --network host --ipc host $RDMA $ENV_HEAD $VOLS $CONTAINER \\
     ray start --head --port=6379 --node-ip-address=$HEAD_IP --block"
 
 echo "Waiting for Ray head..."
@@ -48,7 +54,7 @@ sleep 10
 
 echo "=== Starting Ray worker on spark-3 ==="
 ssh spark-3 "docker run -d --name vllm-worker --gpus all --shm-size 16g \\
-    --network host --ipc host $ENV_WORKER $VOLS $CONTAINER \\
+    --network host --ipc host $RDMA $ENV_WORKER $VOLS $CONTAINER \\
     ray start --address=$HEAD_IP:6379 --node-ip-address=$WORKER_IP --block"
 
 echo "Waiting for worker to join..."

@@ -119,9 +119,12 @@ docker run ... \
 | Socket | 4-6 GB/s | PCIe+CPU bound |
 | RDMA (GDR off) | ~22 GB/s | Proven on Spark |
 
-**vLLM actual usage:** ~2 Gb/s. Network NOT the bottleneck - memory bandwidth (273 GB/s LPDDR5x) is.
+**vLLM measured:** **79% throughput gain** with RDMA over Socket (299 vs 167 tok/s at c=256).
 
-**When to bother with RDMA:** Only if scaling to 4+ nodes, chasing tail latency, or comm-heavy workloads.
+**Latency matters:** RDMA's ~1-2μs latency (vs Socket ~1-2ms) helps tensor parallelism all-reduce ops.
+
+**Dual NIC:** With `NCCL_NETDEVS_POLICY=ALL`, NCCL uses both rails (16 channels alternate NET/IB/0 and NET/IB/1).
+Traffic splits ~50/50 under load. Performance unchanged (~240 tok/s) because we're **latency-bound, not bandwidth-bound**.
 
 **Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [vLLM distributed troubleshooting](https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/), [Spark 22GB/s](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077)
 
@@ -265,15 +268,15 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Memory:** 97GB/119GB used. Enough for ~2 concurrent 256K requests or many shorter ones.
 
-**Benchmark (Jan 2026 - Socket transport):**
+**Benchmark (Jan 2026 - RDMA with GDR disabled):**
 
-| Concurrency | Encode tok/s | Decode tok/s |
-|-------------|--------------|--------------|
-| 1 | 8 | 15 |
-| 64 | 90 | 144 |
-| 256 | 100 | 167 |
+| Concurrency | Decode tok/s | vs Socket |
+|-------------|--------------|-----------|
+| 1 | 18 | baseline |
+| 64 | 273 | **+64%** |
+| 256 | **299** | **+79%** |
 
-Peak with longer generation (`-t 256`): ~288 tok/s decode. Script: `benchmark_vllm.py --sweep`
+**Peak: ~300 tok/s decode** (79% faster than Socket). Script: `benchmark_vllm.py --sweep -t 256`
 
 **Port:** 8000 (default). Use same port for vLLM/SGLang for consistent client code.
 
