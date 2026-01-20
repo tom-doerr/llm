@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Benchmark vLLM server."""
-import argparse, asyncio, time, aiohttp, random
+import argparse, asyncio, time, aiohttp, random, string
 
 async def make_request(session, url, model, prompt, max_tokens):
     start_time = time.perf_counter()
@@ -16,12 +16,18 @@ async def run_benchmark(url, model, prompt, max_tokens, num_requests, concurrenc
     semaphore = asyncio.Semaphore(concurrency)
     async def bounded_request(session):
         async with semaphore: return await make_request(session, url, model, prompt, max_tokens)
-    timeout = aiohttp.ClientTimeout(total=600)
+    timeout = aiohttp.ClientTimeout(total=1800)  # 30 min for long prefills
     async with aiohttp.ClientSession(timeout=timeout) as session:
         return await asyncio.gather(*[bounded_request(session) for _ in range(num_requests)])
 
 URL = "http://192.168.102.11:8000/v1/chat/completions"
 MODEL = "QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
+WORDS = ["the","be","to","of","and","a","in","that","have","it","for","not","on",
+    "with","as","you","do","at","this","but","by","from","they","we","say","or"]
+
+def gen_prompt(target_tokens):
+    """Generate random text targeting approximate token count."""
+    return " ".join(random.choice(WORDS) for _ in range(int(target_tokens * 1.3)))
 
 def run(prompt, max_tokens, num_requests, concurrency):
     start = time.perf_counter()
@@ -31,6 +37,15 @@ def run(prompt, max_tokens, num_requests, concurrency):
     decode_toks = sum(ct for _,ct,_ in results)
     return elapsed, encode_toks/elapsed, decode_toks/elapsed
 
+def run_prefill(target_tokens, num_requests=5, concurrency=1):
+    """Benchmark prefill speed at given prompt length."""
+    prompt = gen_prompt(target_tokens)
+    start = time.perf_counter()
+    results = asyncio.run(run_benchmark(URL, MODEL, prompt, 1, num_requests, concurrency))
+    elapsed = time.perf_counter() - start
+    actual_toks = sum(pt for pt,_,_ in results)
+    return actual_toks / num_requests, actual_toks / elapsed
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt", default="Continue writing numbers: 1, 2, 3, 4, 5,")
@@ -38,8 +53,14 @@ def main():
     parser.add_argument("-n", type=int, default=10)
     parser.add_argument("-c", type=int, default=1)
     parser.add_argument("--sweep", action="store_true")
+    parser.add_argument("--prefill", action="store_true", help="Benchmark prefill at various lengths")
     args = parser.parse_args()
-    if args.sweep:
+    if args.prefill:
+        print("target\tactual\tenc_tok/s", flush=True)
+        for toks in [128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]:
+            actual, rate = run_prefill(toks)
+            print(f"{toks}\t{actual:.0f}\t{rate:.1f}", flush=True)
+    elif args.sweep:
         print("c\treq/s\tenc/s\tdec/s")
         for conc in [1,2,4,8,16,32,64,128,256]:
             elapsed,enc,dec = run(args.prompt, args.t, conc, conc)
