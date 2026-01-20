@@ -11,9 +11,9 @@ CONTAINER="nvcr.io/nvidia/vllm:25.11-py3"
 OOB_IF="enp1s0f1np1"  # Control plane interface
 HEAD_IP="192.168.100.10"
 WORKER_IP="192.168.100.11"
-# Force Socket transport - GPUDirect RDMA not supported on Spark GB10
-ENV="-e NCCL_NET=Socket"  # Force socket, ignore IB devices
-ENV="$ENV -e NCCL_SOCKET_IFNAME=$OOB_IF"
+# Socket transport - NCCL IB requires env var propagation through Ray which is complex
+# See CLAUDE.md for NCCL IB setup (untested with vLLM)
+ENV="-e NCCL_NET=Socket -e NCCL_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e GLOO_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
@@ -40,7 +40,7 @@ ssh spark-3 "docker rm -f vllm-worker 2>/dev/null || true"
 
 echo "=== Starting Ray head on spark-2 ==="
 ssh spark-2 "docker run -d --name vllm-head --gpus all --shm-size 16g \\
-    --network host --ipc host  $ENV_HEAD $VOLS $CONTAINER \\
+    --network host --ipc host $ENV_HEAD $VOLS $CONTAINER \\
     ray start --head --port=6379 --node-ip-address=$HEAD_IP --block"
 
 echo "Waiting for Ray head..."
@@ -48,7 +48,7 @@ sleep 10
 
 echo "=== Starting Ray worker on spark-3 ==="
 ssh spark-3 "docker run -d --name vllm-worker --gpus all --shm-size 16g \\
-    --network host --ipc host  $ENV_WORKER $VOLS $CONTAINER \\
+    --network host --ipc host $ENV_WORKER $VOLS $CONTAINER \\
     ray start --address=$HEAD_IP:6379 --node-ip-address=$WORKER_IP --block"
 
 echo "Waiting for worker to join..."

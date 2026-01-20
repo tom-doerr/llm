@@ -7,9 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Key Facts
 
 - **RoCE over Ethernet** via ConnectX-7 QSFP ports (NOT InfiniBand mode)
-- **GPUDirect RDMA NOT supported** on GB10 - host-staged RDMA works (~190 Gb/s via ib_write_bw)
-- **NCCL requires GPUDirect for IB mode** - without it, must use `NCCL_NET=Socket` (limited to ~100 Gb/s)
-- **Single 200G port = two ~100G "halves"** - TCP/socket tops out ~100 Gb/s per flow
+- **GPUDirect RDMA NOT supported** on GB10 (dma-buf/nvidia-peermem don't work)
+- **NCCL IB works with GDR disabled** - ~22 GB/s proven; NGC container may need plugin workarounds
+- **200 Gb/s = 25 GB/s = ~23.28 GiB/s** line-rate before overheads
 
 ## Hardware Quirk: Each Port Has Two "Halves"
 
@@ -94,8 +94,34 @@ export NCCL_SOCKET_IFNAME=enp1s0f1np1
 export OMPI_MCA_btl_tcp_if_include=enp1s0f1np1
 ```
 
-**NCCL IB (Jan 2026): FAILS on Spark.** GPUDirect RDMA not supported on GB10. NCCL auto-detects IB and
-tries GPUDirect which causes `ncclAllReduce` failures. **Fix:** `NCCL_NET=Socket` to force socket transport.
+**NCCL IB (Jan 2026):** GPUDirect RDMA not supported on GB10 (dma-buf/nvidia-peermem don't work).
+NCCL *can* run IB with GDR disabled (~22 GB/s / 176 Gb/s proven). Our NGC container crashes due to
+DMABUF plugin issue. **Quick fix:** `NCCL_NET=Socket`. **Better fix:** see below.
+
+### NCCL IB with GDR Disabled (Tested Jan 2026)
+
+**Single-node:** Works! Shows `NET/IB : GPU Direct RDMA Disabled for HCA`.
+
+**Multi-node vLLM:** FAILS - env vars don't propagate through Ray to workers.
+Requires `--privileged` for IB device access, but bash wrapper breaks GPU detection.
+
+```bash
+# Works for nccl-tests, NOT for vLLM:
+export NCCL_NET_PLUGIN=none NCCL_DMABUF_ENABLE=0
+export NCCL_NET_GDR_LEVEL=LOC NCCL_NET_GDR_C2C=0
+export NCCL_NET=IB NCCL_IB_HCA=rocep1s0f1
+```
+
+## Socket vs RDMA Limits (Jan 2026)
+
+| Transport | Practical | Notes |
+|-----------|-----------|-------|
+| Socket | 4-6 GB/s | PCIe+CPU bound |
+| RDMA (GDR off) | ~22 GB/s | Proven on Spark |
+
+**vLLM actual usage:** ~2 Gb/s. Network NOT the bottleneck - memory bandwidth (273 GB/s LPDDR5x) is.
+
+**Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [Spark 22GB/s test](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077), [GPUDirect unsupported](https://forums.developer.nvidia.com/t/enabling-gpu-direct-rdma-for-dgx-spark-clustering/352051)
 
 ## Troubleshooting
 
@@ -237,7 +263,15 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Memory:** 97GB/119GB used. Enough for ~2 concurrent 256K requests or many shorter ones.
 
-**Benchmark (Jan 2026):** Peak decode ~288 tok/s at c=256 (long generation). Short prompts plateau at c=64. Script: `benchmark_vllm.py --sweep -t 256`
+**Benchmark (Jan 2026 - Socket transport):**
+
+| Concurrency | Encode tok/s | Decode tok/s |
+|-------------|--------------|--------------|
+| 1 | 8 | 15 |
+| 64 | 90 | 144 |
+| 256 | 100 | 167 |
+
+Peak with longer generation (`-t 256`): ~288 tok/s decode. Script: `benchmark_vllm.py --sweep`
 
 **Port:** 8000 (default). Use same port for vLLM/SGLang for consistent client code.
 
