@@ -98,18 +98,18 @@ export OMPI_MCA_btl_tcp_if_include=enp1s0f1np1
 NCCL *can* run IB with GDR disabled (~22 GB/s / 176 Gb/s proven). Our NGC container crashes due to
 DMABUF plugin issue. **Quick fix:** `NCCL_NET=Socket`. **Better fix:** see below.
 
-### NCCL IB with GDR Disabled (Tested Jan 2026)
+### NCCL IB with GDR Disabled (Jan 2026)
 
-**Single-node:** Works! Shows `NET/IB : GPU Direct RDMA Disabled for HCA`.
-
-**Multi-node vLLM:** FAILS - env vars don't propagate through Ray to workers.
-Requires `--privileged` for IB device access, but bash wrapper breaks GPU detection.
+**Key:** Set env vars via `docker run -e`, NOT later via `docker exec`. Ray workers inherit
+container env but NOT driver shell env. Also need device access + memlock.
 
 ```bash
-# Works for nccl-tests, NOT for vLLM:
-export NCCL_NET_PLUGIN=none NCCL_DMABUF_ENABLE=0
-export NCCL_NET_GDR_LEVEL=LOC NCCL_NET_GDR_C2C=0
-export NCCL_NET=IB NCCL_IB_HCA=rocep1s0f1
+docker run ... \
+  --device=/dev/infiniband --ulimit memlock=-1 --cap-add=IPC_LOCK \
+  -e NCCL_NET_PLUGIN=none -e NCCL_DMABUF_ENABLE=0 \
+  -e NCCL_NET_GDR_LEVEL=LOC -e NCCL_NET_GDR_C2C=0 \
+  -e NCCL_IB_HCA="=rocep1s0f1:1,roceP2p1s0f1:1" \
+  ray start ...
 ```
 
 ## Socket vs RDMA Limits (Jan 2026)
@@ -121,7 +121,9 @@ export NCCL_NET=IB NCCL_IB_HCA=rocep1s0f1
 
 **vLLM actual usage:** ~2 Gb/s. Network NOT the bottleneck - memory bandwidth (273 GB/s LPDDR5x) is.
 
-**Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [Spark 22GB/s test](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077), [GPUDirect unsupported](https://forums.developer.nvidia.com/t/enabling-gpu-direct-rdma-for-dgx-spark-clustering/352051)
+**When to bother with RDMA:** Only if scaling to 4+ nodes, chasing tail latency, or comm-heavy workloads.
+
+**Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [vLLM distributed troubleshooting](https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/), [Spark 22GB/s](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077)
 
 ## Troubleshooting
 
