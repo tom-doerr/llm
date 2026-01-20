@@ -7,9 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Key Facts
 
 - **RoCE over Ethernet** via ConnectX-7 QSFP ports (NOT InfiniBand mode)
-- **GPUDirect RDMA NOT supported** - use host-staged RDMA (`cudaHostAlloc` + `ib_reg_mr`)
+- **GPUDirect RDMA NOT supported** on GB10 - host-staged RDMA works (~190 Gb/s via ib_write_bw)
+- **NCCL requires GPUDirect for IB mode** - without it, must use `NCCL_NET=Socket` (limited to ~100 Gb/s)
 - **Single 200G port = two ~100G "halves"** - TCP/socket tops out ~100 Gb/s per flow
-- **To get ~200 Gb/s:** Need RoCE (NCCL NET/IB) + drive BOTH halves concurrently
 
 ## Hardware Quirk: Each Port Has Two "Halves"
 
@@ -94,7 +94,8 @@ export NCCL_SOCKET_IFNAME=enp1s0f1np1
 export OMPI_MCA_btl_tcp_if_include=enp1s0f1np1
 ```
 
-**NCCL IB (Jan 2026): FAILS on Spark RoCE.** `NCCL_NET=IB` + `NCCL_IB_HCA` causes `ncclCommInitRank` error. Use socket-based NCCL.
+**NCCL IB (Jan 2026): FAILS on Spark.** GPUDirect RDMA not supported on GB10. NCCL auto-detects IB and
+tries GPUDirect which causes `ncclAllReduce` failures. **Fix:** `NCCL_NET=Socket` to force socket transport.
 
 ## Troubleshooting
 
