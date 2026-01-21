@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark vLLM server."""
-import argparse, asyncio, time, aiohttp, random, string
+import argparse, asyncio, time, aiohttp, random, string, base64, io
+from PIL import Image
 
 async def make_request(session, url, model, prompt, max_tokens):
     start_time = time.perf_counter()
@@ -25,6 +26,13 @@ MODEL = "QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
 WORDS = ["the","be","to","of","and","a","in","that","have","it","for","not","on",
     "with","as","you","do","at","this","but","by","from","they","we","say","or"]
 
+def gen_image_b64(w, h):
+    """Generate random noise image as base64 JPEG."""
+    img = Image.new('RGB', (w, h))
+    img.putdata([(random.randint(0,255),)*3 for _ in range(w*h)])
+    buf = io.BytesIO(); img.save(buf, format='JPEG', quality=80)
+    return base64.b64encode(buf.getvalue()).decode()
+
 def gen_prompt(target_tokens):
     """Generate random text targeting approximate token count."""
     return " ".join(random.choice(WORDS) for _ in range(int(target_tokens * 1.3)))
@@ -46,6 +54,20 @@ def run_prefill(target_tokens, num_requests=5, concurrency=1):
     actual_toks = sum(pt for pt,_,_ in results)
     return actual_toks / num_requests, actual_toks / elapsed
 
+async def img_req(s, url, model, b64, mt):
+    c = [{"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{b64}"}},
+         {"type":"text","text":"Describe."}]
+    async with s.post(url, json={"model":model,"messages":[{"role":"user","content":c}],
+        "max_tokens":mt}) as r: d=await r.json(); return d["usage"]["prompt_tokens"]
+
+def run_img(w,h,n,c):
+    b=gen_image_b64(w,h);sem=asyncio.Semaphore(c);t=aiohttp.ClientTimeout(total=600)
+    async def go():
+        async with aiohttp.ClientSession(timeout=t) as s:
+            st=time.perf_counter();r=await asyncio.gather(*[img_req(s,URL,MODEL,b,32) for _ in range(n)])
+            return time.perf_counter()-st,sum(r)
+    return asyncio.run(go())
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt", default="Continue writing numbers: 1, 2, 3, 4, 5,")
@@ -54,8 +76,15 @@ def main():
     parser.add_argument("-c", type=int, default=1)
     parser.add_argument("--sweep", action="store_true")
     parser.add_argument("--prefill", action="store_true", help="Benchmark prefill at various lengths")
+    parser.add_argument("--image", action="store_true", help="Benchmark image throughput")
     args = parser.parse_args()
-    if args.prefill:
+    if args.image:
+        print("res\tc\treq/s\timg_tok/s", flush=True)
+        for w in [256,512,1024,2048]:
+            for c in [1,4,8,16,32]:
+                n=max(c,4); el,toks = run_img(w,w,n,c)
+                print(f"{w}x{w}\t{c}\t{n/el:.2f}\t{toks/el:.1f}", flush=True)
+    elif args.prefill:
         print("target\tactual\tenc_tok/s", flush=True)
         for toks in [128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]:
             actual, rate = run_prefill(toks)

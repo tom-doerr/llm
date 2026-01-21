@@ -123,8 +123,9 @@ docker run ... \
 
 **Latency matters:** RDMA's ~1-2μs latency (vs Socket ~1-2ms) helps tensor parallelism all-reduce ops.
 
-**Single-rail is faster:** Dual-rail with GDR disabled adds CPU staging overhead → 20-37% slower.
-Use `NCCL_IB_HCA='=rocep1s0f1:1'` for best performance (~300 tok/s vs ~240 dual-rail).
+**Single-rail is faster:** Dual-rail with GDR disabled adds CPU staging overhead → 31% slower.
+Use `NCCL_IB_HCA='=rocep1s0f1:1'` for best performance (~300 tok/s vs ~205 dual-rail).
+Tested Jan 2026: dual-rail 205 tok/s, single-rail 299 tok/s at c=256.
 
 **Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [vLLM distributed troubleshooting](https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/), [Spark 22GB/s](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077)
 
@@ -278,6 +279,25 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Peak: ~300 tok/s decode** (79% faster than Socket). Script: `benchmark_vllm.py --sweep -t 256`
 
+**Prefill benchmark:** `benchmark_vllm.py --prefill`
+| Tokens | Enc tok/s | Time |
+|--------|-----------|------|
+| 1K | 1,266 | 1s |
+| 8K | 996 | 11s |
+| 64K | 312 | 4.5min |
+| 131K | 174 | 16min |
+
+**Image benchmark:** `benchmark_vllm.py --image`
+
+| Resolution | Tokens/img | Peak tok/s | Best c |
+|------------|------------|------------|--------|
+| 256×256 | ~75 | 167 | 16 |
+| 512×512 | ~267 | 83 | 32 |
+| 1024×1024 | ~1024 | 167 | 16 |
+| 2048×2048 | ~4096 | 708 | 32 |
+
+**Key:** Larger images benefit most from batching. Very noisy under concurrent load
+
 **Port:** 8000 (default). Use same port for vLLM/SGLang for consistent client code.
 
 **Access from spark-1:** Use 10GbE IP `192.168.102.11:8000` (200G IPs only work between spark-2/spark-3)
@@ -305,13 +325,13 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 ### Ray Compiled DAG CPU Overhead (Jan 2026)
 
-**Root cause of ~1200% CPU:** 12× `worker.channel_` threads busy-polling Ray shared memory channels.
+**Root cause of ~1600% CPU:** EngineCore busy-polling + Ray compiled DAG channels.
 
-**Fix (single-node only):** Set `VLLM_USE_RAY_COMPILED_DAG=0` at container startup.
+**Fix:** `VLLM_SLEEP_WHEN_IDLE=1` - drops idle CPU from ~1600% to ~280% (load avg 18→3).
 
-**Multi-node limitation:** vLLM v1 **forces compiled DAG on** for multi-node TP. Setting `VLLM_USE_RAY_COMPILED_DAG=0` gets overwritten to `1`. The CPU overhead is unavoidable for multi-node setups.
+**Multi-node limitation:** vLLM V1 forces compiled DAG on. `VLLM_USE_RAY_COMPILED_DAG=0` ignored.
 
-**Tradeoff:** Benchmarks show ~2.5x higher throughput with DAG disabled (single-node only).
+**Result:** CPU idle 8%→78%, load avg 18→3. Small latency cost on wake-up (acceptable).
 
 ## Model Cache (Jan 2026)
 

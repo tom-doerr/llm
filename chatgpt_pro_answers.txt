@@ -1632,3 +1632,111 @@ If you want one blunt “next step”: **try `NCCL_NETDEVS_POLICY=ALL` + `NCCL_D
 [4]: https://forums.developer.nvidia.com/t/help-running-nvfp4-model-on-2x-dgx-spark-with-vllm-ray-multi-node/353723 "Help: Running NVFP4 model on 2x DGX Spark with vLLM + Ray (multi-node) - DGX Spark / GB10 - NVIDIA Developer Forums"
 [5]: https://discuss.ray.io/t/ray-log-location/10394 "https://discuss.ray.io/t/ray-log-location/10394"
 
+**TLDR**
+Yes — on DGX Spark specifically, a “dual‑rail” setup can be *worse* than a single ~100 Gb rail if it’s the wrong kind of dual‑rail (bonding/load‑balancing that doesn’t actually spread your traffic), or if you accidentally pin both “rails” onto the same underlying PCIe path. With Spark’s ConnectX‑7 wiring/port mapping, it’s easy to end up at ~92–98 Gbps when you thought you built 200 Gbps, and you can also add latency/instability. If you just want a fast, simple 2‑node direct link for NCCL: one QSFP cable + NVIDIA’s playbook is usually the least painful way to hit “full” bandwidth; dual‑cable/dual‑rail only helps if you can validate all interfaces end‑to‑end.
+
+---
+
+## Why dual‑rail can be worse on DGX Spark (not just “not better”)
+
+### 1) Spark’s “200 Gb” is not a normal “one link = 200 Gb” story
+
+DGX Spark lists a ConnectX‑7 NIC at **200 Gbps**. ([NVIDIA][1])
+But in practice, the NIC shows up as **4 network interfaces** in Linux even though the chassis has **2 QSFP ports**. NVIDIA engineers explain this is because **GB10 can’t provide more than PCIe x4 per device**, so they use **ConnectX‑7 multi‑host mode** to aggregate **two separate PCIe Gen5 x4 links** to reach 200 Gbps. ([NVIDIA Developer Forums][2])
+
+Net effect: you can easily build a “dual‑rail” that *looks* right but doesn’t actually give you two independent 100 Gb paths.
+
+### 2) Mis-pairing the “rails” can cap you at ~100 Gb (or a bit below)
+
+ServeTheHome’s deep dive shows the underlying wiring is finicky: if you “mess this up” you end up driving **two links through one PCIe Gen5 x4** and you land around **~92–95 Gbps**; with careful alignment + RDMA tooling they measured about **~185–190 Gbps** combined. ([ServeTheHome][3])
+
+So yes: **dual‑rail can be worse than single‑rail** if your dual‑rail accidentally collapses onto the same bottleneck (one x4 path) *and* adds overhead.
+
+### 3) Bonding/LACP often doesn’t do what people assume (especially for “one big flow”)
+
+If your “direct dual connection” is mostly:
+
+* one or a few big TCP flows (scp/rsync/NFS/iperf with default settings), or
+* any workload that doesn’t create lots of parallel flows/channels
+
+…then typical link aggregation (LACP, bonding mode 802.3ad, XOR hashing, etc.) may place most traffic on **one** member link. That can be **equal to** a single 100 Gb rail, or **worse** if you add:
+
+* packet reordering (certain bonding modes),
+* extra CPU/interrupt overhead,
+* suboptimal hash distribution.
+
+This is exactly why people report “link is 200G, iperf is ~98G” on Spark. ([NVIDIA Developer Forums][2])
+
+### 4) RDMA/NCCL can fall back or underutilize rails if you “help” it the wrong way
+
+For NCCL/UCX:
+
+* If you inadvertently force NCCL onto sockets/TCP, you can lose a lot versus RDMA.
+* If you bind UCX/NCCL to only one interface, you may cap at ~100.
+  NVIDIA’s “NCCL for Two Sparks” walkthrough explicitly binds `UCX_NET_DEVICES` / `NCCL_SOCKET_IFNAME` to a single active interface in the example. ([build.nvidia.com][4])
+  That may be fine for their intended setup, but it also means **your dual‑rail won’t automatically help** unless the rest of the stack is actually using both rails.
+
+---
+
+## What NVIDIA’s docs imply for your exact scenario (direct 2‑node link)
+
+NVIDIA’s own “Connect Two Sparks” playbook says:
+
+* **One QSFP cable** between the two Sparks is enough for “200GbE direct connection”. ([build.nvidia.com][5])
+* **Full bandwidth can be achieved with just one QSFP cable.**
+* If you use **two QSFP cables**, then **all four interfaces must be assigned IP addresses to obtain full bandwidth**. ([build.nvidia.com][5])
+
+So from a “don’t overcomplicate it” standpoint, the docs are basically saying:
+**single‑cable is the default best path; dual‑cable/dual‑rail is advanced and easy to botch.**
+
+---
+
+## My conclusion vs popular opinion
+
+**Popular opinion (HPC / cluster world):**
+Dual‑rail is generally better (more bandwidth, resilience, more paths).
+
+**My conclusion (for DGX Spark direct 2‑node):**
+Dual‑rail is *conditionally* better, but **it’s unusually easy for “dual rail” on Spark to become worse than a clean single 100 Gb rail** because:
+
+* the 200 Gb story is implemented via multi‑host / split interfaces (not a simple single netdev),
+* misconfiguration can hard-cap you at ~92–98 Gbps ([ServeTheHome][3]),
+* bonding/load balancing can underutilize or destabilize things,
+* many workloads won’t naturally spread traffic.
+
+If you want **reliable performance quickly**, start with **one QSFP cable** and validate NCCL performance; only then add complexity.
+
+---
+
+## Practical guidance (no fluff)
+
+### If your goal is NCCL/distributed training performance
+
+1. Do **single QSFP cable**, follow NVIDIA’s “Connect Two Sparks” steps. ([build.nvidia.com][5])
+2. Validate with `nccl-tests` and look at **bus bandwidth** (rule of thumb):
+
+* 100 Gbps ≈ **12.5 GB/s** theoretical (≈11.6 GiB/s)
+* 200 Gbps ≈ **25 GB/s** theoretical (≈23.3 GiB/s)
+  If you’re seeing ~12 GB/s class numbers, you’re effectively on one “100G half”.
+
+### If you insist on dual‑rail / dual‑cable
+
+* Treat it as an **advanced tuning exercise**, not “plug 2 cables = 2× faster”.
+* Per NVIDIA: you must assign IPs to **all four interfaces** to get full bandwidth with two cables. ([build.nvidia.com][5])
+* Expect **~200 Gbps total**, not 400, because the underlying limitation is the PCIe delivery into the NIC. ([NVIDIA Developer Forums][2])
+
+### Quick sanity checks that catch 90% of “dual rail is worse” cases
+
+* `ibdev2netdev` to see what’s actually **Up** (NVIDIA uses this in their playbooks). ([build.nvidia.com][5])
+* Don’t trust a single `iperf3` stream. Use lots of parallelism (e.g., `-P 32` or more) if you’re testing aggregate throughput; otherwise you can “prove” the link is 100 even when the platform can do ~200. ([ServeTheHome][3])
+
+---
+
+If you tell me what traffic you actually care about (NCCL collectives? NFS? model shard transfer? RDMA perftest?), I can be more specific about whether dual‑rail helps or just adds failure modes. But the direct answer is: **yes, dual‑rail can absolutely be worse than a single 100 Gb rail on Spark — and it’s not rare; it’s a common misconfiguration outcome on this platform.**
+
+[1]: https://www.nvidia.com/en-us/products/workstations/dgx-spark/ "A Grace Blackwell AI supercomputer on your desk | NVIDIA DGX Spark"
+[2]: https://forums.developer.nvidia.com/t/connectx-7-nic-in-dgx-spark/350417 "ConnectX-7 NIC in DGX Spark - DGX Spark / GB10 - NVIDIA Developer Forums"
+[3]: https://www.servethehome.com/the-nvidia-gb10-connectx-7-200gbe-networking-is-really-different/ "The NVIDIA GB10 ConnectX-7 200GbE Networking is Really Different - ServeTheHome"
+[4]: https://build.nvidia.com/spark/nccl/stacked-sparks "NCCL for Two Sparks | DGX Spark"
+[5]: https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks "Connect Two Sparks | DGX Spark"
+
