@@ -1740,3 +1740,1382 @@ If you tell me what traffic you actually care about (NCCL collectives? NFS? mode
 [4]: https://build.nvidia.com/spark/nccl/stacked-sparks "NCCL for Two Sparks | DGX Spark"
 [5]: https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks "Connect Two Sparks | DGX Spark"
 
+**TLDR**
+Your script is *not* “dual‑rail RDMA” right now: you explicitly force **single‑rail** with `NCCL_IB_HCA='=rocep1s0f1:1'`, and you also have a **mismatched control‑plane interface vs Ray IP** (`OOB_IF=enp1s0f1np1` but `HEAD_IP/WORKER_IP=192.168.100.x`). Fix both, then dual‑rail is basically: **pick one QSFP port (f0 or f1), keep the IP + IFNAME consistent, and set `NCCL_IB_HCA` to include both “twin” RoCE devices for that port** (e.g., `=rocep1s0f1:1,roceP2p1s0f1:1`). Don’t bond unless you enjoy pain; the most reliable path on Spark is multi‑rail without bonding. ([NVIDIA NIM APIs][1])
+
+---
+
+## The big problems in your script (straight)
+
+### 1) You’ve got a **routing/identity mismatch** (Ray vs IFNAME)
+
+You set:
+
+* `OOB_IF="enp1s0f1np1"`
+* `HEAD_IP="192.168.100.10"` / `WORKER_IP="192.168.100.11"`
+
+…but NVIDIA’s own manual netplan example maps **192.168.100.10/11 to `enp1s0f0np0`**, while `enp1s0f1np1` is on **192.168.200.12/13**. ([NVIDIA NIM APIs][1])
+
+So you’re effectively telling:
+
+* Ray: “my node IP is 192.168.100.x (f0)”
+* NCCL/Gloo bootstrap: “use enp1s0f1np1 (f1)”
+
+That can work accidentally, but it’s an easy way to get “it starts but comms are weird” failure modes.
+
+### 2) You explicitly force **single rail**
+
+This line:
+
+```bash
+ENV="$ENV -e NCCL_IB_HCA='=rocep1s0f1:1'"
+```
+
+means: use **exactly one RDMA interface/port**. The leading `=` is valid NCCL syntax (“exact match”) and `:1` picks port 1. ([NVIDIA Docs][2])
+But it also guarantees you’ll never get dual‑rail bandwidth.
+
+### 3) Your “dual‑rail intent” conflicts with the official Spark guidance (and the reality)
+
+NVIDIA’s Spark docs repeatedly emphasize there are “twin” interfaces per physical QSFP port (the `enp1…` and the `enP2…` side). ([NVIDIA NIM APIs][1])
+If you want real aggregate bandwidth, you need to treat those as separate rails at the RDMA level (or rely on NCCL fusion). People trying Linux bonding often report it either breaks RoCE reachability or only uses one link per flow; multi‑rail is what’s stable. ([NVIDIA Developer Forums][3])
+
+---
+
+## What “dual rail while keeping RDMA” should look like in your script
+
+### Step 1) Choose **one** QSFP port and make everything consistent
+
+You have two sane configurations:
+
+#### Option A: Use **f0** (192.168.100.x)
+
+Matches NVIDIA’s manual example for `enp1s0f0np0`. ([NVIDIA NIM APIs][1])
+Use:
+
+* `OOB_IF=enp1s0f0np0`
+* `HEAD_IP=192.168.100.10`
+* `WORKER_IP=192.168.100.11`
+* Dual‑rail RoCE devices: `rocep1s0f0` and `roceP2p1s0f0`
+
+#### Option B: Use **f1** (192.168.200.x)
+
+Matches NVIDIA’s manual example for `enp1s0f1np1`. ([NVIDIA NIM APIs][1])
+Use:
+
+* `OOB_IF=enp1s0f1np1`
+* `HEAD_IP=192.168.200.12`
+* `WORKER_IP=192.168.200.13`
+* Dual‑rail RoCE devices: `rocep1s0f1` and `roceP2p1s0f1`
+
+### Step 2) Set `NCCL_IB_HCA` to **both rails**
+
+NCCL supports listing multiple HCAs/ports; with `=` it treats tokens as exact interface names. ([NVIDIA Docs][2])
+
+For f0:
+
+```bash
+ENV="$ENV -e NCCL_IB_HCA='=rocep1s0f0:1,roceP2p1s0f0:1'"
+```
+
+For f1:
+
+```bash
+ENV="$ENV -e NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'"
+```
+
+### Step 3) Add 1–2 knobs that actually help multi‑rail saturate
+
+On Spark specifically, people have seen traffic “look pinned” to one port unless you increase QP parallelism. One practical suggestion from the Spark forum is:
+
+* `NCCL_IB_QPS_PER_CONNECTION=4` (or 8 to test) ([NVIDIA Developer Forums][3])
+
+So add:
+
+```bash
+ENV="$ENV -e NCCL_IB_QPS_PER_CONNECTION=4"
+```
+
+If you want NCCL to *force* fusing devices (so it stripes more predictably), NCCL 2.24+ added `NCCL_NET_FORCE_MERGE`, where you describe fused NIC groups as a semicolon-delimited list of comma-delimited NIC names. ([NVIDIA Developer][4])
+Example (for f1 twins):
+
+```bash
+ENV="$ENV -e NCCL_NET_FORCE_MERGE=rocep1s0f1,roceP2p1s0f1"
+```
+
+This is optional; try without first.
+
+---
+
+## Concrete patch for your script (drop-in)
+
+Here’s the minimum change set that makes it coherent + dual‑rail.
+
+### Replace your current network block with this
+
+```bash
+# Pick which QSFP port you’re using: f0 (192.168.100.x) or f1 (192.168.200.x)
+PORT="${PORT:-f0}"
+
+if [[ "$PORT" == "f0" ]]; then
+  OOB_IF="enp1s0f0np0"
+  HEAD_IP="192.168.100.10"
+  WORKER_IP="192.168.100.11"
+  NCCL_HCA="=rocep1s0f0:1,roceP2p1s0f0:1"
+elif [[ "$PORT" == "f1" ]]; then
+  OOB_IF="enp1s0f1np1"
+  HEAD_IP="192.168.200.12"
+  WORKER_IP="192.168.200.13"
+  NCCL_HCA="=rocep1s0f1:1,roceP2p1s0f1:1"
+else
+  echo "PORT must be f0 or f1"
+  exit 1
+fi
+```
+
+(Those IP↔IFNAME pairings come straight from NVIDIA’s “Connect Two Sparks” manual netplan example.) ([NVIDIA NIM APIs][1])
+
+### Replace your single-rail NCCL line with dual-rail + QPs
+
+```bash
+ENV="$ENV -e NCCL_IB_HCA='$NCCL_HCA'"
+ENV="$ENV -e NCCL_IB_QPS_PER_CONNECTION=4"
+```
+
+(`=` exact-match and `:port` are NCCL-supported.) ([NVIDIA Docs][2])
+
+### Keep bootstrap consistent
+
+These are fine *as long as* `OOB_IF` matches the IPs you hand to Ray:
+
+```bash
+ENV="$ENV -e NCCL_SOCKET_IFNAME=$OOB_IF"
+ENV="$ENV -e GLOO_SOCKET_IFNAME=$OOB_IF"
+```
+
+### Optional: delete this unless you know you need it
+
+```bash
+ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF"
+```
+
+NVIDIA sets `UCX_NET_DEVICES` in their MPI-based NCCL test playbook. vLLM+Ray doesn’t usually need UCX at all; leaving it wrong can only restrict things. ([NVIDIA NIM APIs][5])
+
+---
+
+## Sanity checks you should add (fast, prevents self-sabotage)
+
+Before starting containers, fail fast if the expected rails aren’t up:
+
+```bash
+echo "=== Verify active rails on head ==="
+ssh spark-2 "ibdev2netdev | egrep '(rocep1s0${PORT}|roceP2p1s0${PORT}).*Up' || true"
+
+echo "=== Verify active rails on worker ==="
+ssh spark-3 "ibdev2netdev | egrep '(rocep1s0${PORT}|roceP2p1s0${PORT}).*Up' || true"
+```
+
+NVIDIA’s own playbooks use `ibdev2netdev` to identify which port is Up. ([NVIDIA NIM APIs][1])
+
+---
+
+## What “success” should look like (numbers)
+
+Rough mental math:
+
+* 100 Gbps ≈ 12.5 GB/s (theoretical)
+* 200 Gbps ≈ 25 GB/s (theoretical)
+
+On Spark, people report ~26–27 GB/s “bus bandwidth” in NCCL tests when things are aligned right. ([NVIDIA Developer Forums][3])
+If you’re stuck around ~12–13 GB/s class numbers, you’re basically single-rail.
+
+---
+
+If you want, I can also rewrite your script to **auto-detect whether f0 or f1 is Up** (via `ibdev2netdev` on spark‑2) and set `PORT/OOB_IF/HEAD_IP/NCCL_HCA` automatically—removes a whole class of “wrong port” bugs.
+
+[1]: https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks "Connect Two Sparks | DGX Spark"
+[2]: https://docs.nvidia.com/deeplearning/nccl/archives/nccl_2203/user-guide/docs/env.html?utm_source=chatgpt.com "Environment Variables — NCCL 2.20.3 documentation"
+[3]: https://forums.developer.nvidia.com/t/connectx-7-nic-in-dgx-spark/350417?page=2 "ConnectX-7 NIC in DGX Spark - Page 2 - DGX Spark / GB10 - NVIDIA Developer Forums"
+[4]: https://developer.nvidia.com/blog/networking-reliability-and-observability-at-scale-with-nccl-2-24/?utm_source=chatgpt.com "Networking Reliability and Observability at Scale with ..."
+[5]: https://build.nvidia.com/spark/nccl/stacked-sparks "NCCL for Two Sparks | DGX Spark"
+
+
+
+
+**TLDR**
+Done. I rewrote your script so it **auto-detects the connected Spark port group**, **forces dual-rail RoCE RDMA** (no bonding), and **keeps Ray/Gloo/NCCL bootstrap on the *same* interface/IP** (fixing your current f1-vs-192.168.100.x mismatch). It hard-fails if the 2nd rail has no IPv4 (because “dual-rail RoCE” is fake without GIDs/IPs on both rails).
+
+[Download the rewritten script](sandbox:/mnt/data/start-vllm-multinode-dualrail.sh)
+
+---
+
+## What changed (the important bits)
+
+* **Autodetects** whether `f0` or `f1` is the live direct link by checking:
+
+  * both rails are `operstate=up` on **both nodes**
+  * both rails have **IPv4** on **both nodes**
+  * both rails can **ping via the correct interface** (`ping -I <iface> …`)
+* Picks a consistent control plane:
+
+  * `OOB_IF` becomes the *actual* linked `enp...` interface
+  * `HEAD_IP` / `WORKER_IP` are read from `ip addr` on that interface (no hardcoded wrong subnet)
+* Forces **dual-rail RDMA**:
+
+  * `NCCL_IB_HCA="=rocep...:1,roceP2p...:1"`
+  * `NCCL_IB_QPS_PER_CONNECTION=4` (default; overrideable)
+* Removes the “UCX_NET_DEVICES=$OOB_IF” footgun (it can restrict/derail multi-rail behavior in weird ways).
+
+---
+
+## The rewritten script
+
+```bash
+#!/usr/bin/env bash
+# Start vLLM multi-node on two DGX Sparks (head + worker) using dual-rail RoCE (RDMA) without bonding.
+#
+# What this script does differently vs the usual "single NIC" recipes:
+#   - Autodetects which Spark NIC port group is actually linked between nodes (f0 or f1)
+#   - Requires BOTH rails of that group to have IPv4 addresses on BOTH nodes (RoCE needs GIDs)
+#   - Forces NCCL to use BOTH RDMA devices (dual-rail) via NCCL_IB_HCA
+#   - Keeps Ray/Gloo/NCCL bootstrap on the same control-plane interface/IP (no mismatched subnets)
+#
+# Usage:
+#   ./start-vllm-multinode-dualrail.sh [--debug] [--port f0|f1] [--iface <enp...>] [--dry-run]
+#
+# Environment overrides (optional):
+#   HEAD_HOST, WORKER_HOST, MODEL, CONTAINER, VLLM_PORT, RAY_PORT,
+#   HF_CACHE_DIR, SITE_CUSTOMIZE, DEBUG_NCCL, NCCL_IB_QPS_PER_CONNECTION, HF_HUB_OFFLINE
+#
+set -Eeuo pipefail
+
+# ----------------------------
+# Config (override via env)
+# ----------------------------
+HEAD_HOST=${HEAD_HOST:-spark-2}
+WORKER_HOST=${WORKER_HOST:-spark-3}
+
+MODEL=${MODEL:-QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ}
+CONTAINER=${CONTAINER:-nvcr.io/nvidia/vllm:25.11-py3}
+
+RAY_PORT=${RAY_PORT:-6379}
+VLLM_PORT=${VLLM_PORT:-8000}
+
+HF_CACHE_DIR=${HF_CACHE_DIR:-/home/tom/.cache/huggingface}
+SITE_CUSTOMIZE=${SITE_CUSTOMIZE:-/home/tom/llm/sitecustomize.py}
+
+DEBUG_NCCL=${DEBUG_NCCL:-0}
+DRY_RUN=0
+
+# Force selection (optional)
+FORCE_PORT=${FORCE_PORT:-""}      # f0 or f1
+FORCE_OOB_IF=${FORCE_OOB_IF:-""}  # e.g. enp1s0f0np0 or enp1s0f1np1
+
+# NCCL tuning knobs (reasonable defaults)
+NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION:-4}
+HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+
+# ----------------------------
+# Arg parsing
+# ----------------------------
+usage() {
+  cat <<USAGE
+Usage: $0 [--debug] [--port f0|f1] [--iface <enp...>] [--dry-run]
+
+  --debug           Enable NCCL debug logging inside containers
+  --port f0|f1      Force using a specific Spark port group (skips autodetect)
+  --iface <enp...>  Force control-plane interface (enp1s0f0np0 or enp1s0f1np1)
+  --dry-run         Print what would run, do not execute
+
+Examples:
+  $0
+  $0 --debug
+  $0 --port f0
+  $0 --iface enp1s0f1np1
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --debug)
+      DEBUG_NCCL=1
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --port)
+      FORCE_PORT="${2:-}"; shift 2
+      ;;
+    --iface)
+      FORCE_OOB_IF="${2:-}"; shift 2
+      ;;
+    -h|--help)
+      usage; exit 0
+      ;;
+    *)
+      echo "ERROR: Unknown argument: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+# ----------------------------
+# Helpers
+# ----------------------------
+log() { echo "[$(date +'%F %T')] $*"; }
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+ssh_run() {
+  local host="$1"; shift
+  local cmd="$*"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "+ ssh ${host} \"${cmd}\""
+    return 0
+  fi
+  ssh -o BatchMode=yes "${host}" "${cmd}"
+}
+
+get_ipv4() {
+  local host="$1" dev="$2"
+  ssh_run "$host" "ip -4 -o addr show dev ${dev} 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | head -n1"
+}
+
+operstate() {
+  local host="$1" dev="$2"
+  ssh_run "$host" "cat /sys/class/net/${dev}/operstate 2>/dev/null || echo unknown"
+}
+
+require_cmd_on_node() {
+  local host="$1" cmd="$2"
+  ssh_run "$host" "command -v ${cmd} >/dev/null 2>&1" \
+    || die "${cmd} not found on ${host}. Install rdma-core (for ibdev2netdev) and iproute2."
+}
+
+ping_once_from_head_iface() {
+  local iface="$1" dst_ip="$2"
+  # -I forces the egress interface so we actually validate each rail.
+  ssh_run "$HEAD_HOST" "ping -I ${iface} -c 1 -W 1 ${dst_ip} >/dev/null 2>&1"
+}
+
+# ----------------------------
+# Spark port group definitions
+# ----------------------------
+# Each Spark QSFP port group effectively has two rails:
+#   - primary:  enp...
+#   - sibling:  enP2p...
+# and matching RDMA device names:
+#   - primary:  rocep...
+#   - sibling:  roceP2p...
+#
+# f0 group
+P0_IF_A="enp1s0f0np0"
+P0_IF_B="enP2p1s0f0np0"
+P0_RDMA_A="rocep1s0f0"
+P0_RDMA_B="roceP2p1s0f0"
+
+# f1 group
+P1_IF_A="enp1s0f1np1"
+P1_IF_B="enP2p1s0f1np1"
+P1_RDMA_A="rocep1s0f1"
+P1_RDMA_B="roceP2p1s0f1"
+
+# ----------------------------
+# Port selection / validation
+# ----------------------------
+select_group() {
+  local port="$1"
+  case "$port" in
+    f0)
+      OOB_IF="$P0_IF_A"; RAIL_IF_A="$P0_IF_A"; RAIL_IF_B="$P0_IF_B"; RDMA_A="$P0_RDMA_A"; RDMA_B="$P0_RDMA_B" ;;
+    f1)
+      OOB_IF="$P1_IF_A"; RAIL_IF_A="$P1_IF_A"; RAIL_IF_B="$P1_IF_B"; RDMA_A="$P1_RDMA_A"; RDMA_B="$P1_RDMA_B" ;;
+    *)
+      die "Invalid port group '$port' (expected f0 or f1)" ;;
+  esac
+}
+
+validate_group_on_node() {
+  local host="$1"
+  local st_a st_b ip_a ip_b
+
+  st_a="$(operstate "$host" "$RAIL_IF_A" | tr -d '\r')"
+  st_b="$(operstate "$host" "$RAIL_IF_B" | tr -d '\r')"
+
+  ip_a="$(get_ipv4 "$host" "$RAIL_IF_A" | tr -d '\r')"
+  ip_b="$(get_ipv4 "$host" "$RAIL_IF_B" | tr -d '\r')"
+
+  echo "$st_a|$ip_a|$st_b|$ip_b"
+}
+
+pick_best_group() {
+  local candidates=(f0 f1)
+
+  # Forced by iface?
+  if [[ -n "$FORCE_OOB_IF" ]]; then
+    if [[ "$FORCE_OOB_IF" == "$P0_IF_A" ]]; then
+      FORCE_PORT="f0"
+    elif [[ "$FORCE_OOB_IF" == "$P1_IF_A" ]]; then
+      FORCE_PORT="f1"
+    else
+      die "--iface must be ${P0_IF_A} or ${P1_IF_A} (got: $FORCE_OOB_IF)"
+    fi
+  fi
+
+  # Forced by port?
+  if [[ -n "$FORCE_PORT" ]]; then
+    candidates=("$FORCE_PORT")
+  fi
+
+  for p in "${candidates[@]}"; do
+    select_group "$p"
+
+    local head_info worker_info
+    head_info="$(validate_group_on_node "$HEAD_HOST")"
+    worker_info="$(validate_group_on_node "$WORKER_HOST")"
+
+    IFS='|' read -r head_st_a head_ip_a head_st_b head_ip_b <<<"$head_info"
+    IFS='|' read -r work_st_a work_ip_a work_st_b work_ip_b <<<"$worker_info"
+
+    # Require both rails have carrier and IPv4 on both nodes
+    if [[ "$head_st_a" != "up" || "$head_st_b" != "up" || "$work_st_a" != "up" || "$work_st_b" != "up" ]]; then
+      log "Skip $p: operstate not up on both rails (head: $RAIL_IF_A=$head_st_a $RAIL_IF_B=$head_st_b, worker: $RAIL_IF_A=$work_st_a $RAIL_IF_B=$work_st_b)"
+      continue
+    fi
+    if [[ -z "$head_ip_a" || -z "$head_ip_b" || -z "$work_ip_a" || -z "$work_ip_b" ]]; then
+      log "Skip $p: missing IPv4 on one/both rails (head: $RAIL_IF_A=$head_ip_a $RAIL_IF_B=$head_ip_b, worker: $RAIL_IF_A=$work_ip_a $RAIL_IF_B=$work_ip_b)"
+      continue
+    fi
+
+    # Quick connectivity check on BOTH rails (forces egress interface)
+    if ! ping_once_from_head_iface "$RAIL_IF_A" "$work_ip_a"; then
+      log "Skip $p: ping head->worker failed on rail A ($RAIL_IF_A -> $work_ip_a)"
+      continue
+    fi
+    if ! ping_once_from_head_iface "$RAIL_IF_B" "$work_ip_b"; then
+      log "Skip $p: ping head->worker failed on rail B ($RAIL_IF_B -> $work_ip_b)"
+      continue
+    fi
+
+    # Selected
+    PORT_GROUP="$p"
+    HEAD_IP="$head_ip_a"
+    WORKER_IP="$work_ip_a"
+    HEAD_RAIL_IP_B="$head_ip_b"
+    WORKER_RAIL_IP_B="$work_ip_b"
+    return 0
+  done
+
+  die "Could not find a usable dual-rail link between ${HEAD_HOST} and ${WORKER_HOST}.
+- Ensure the QSFP cable is connected between the same port group on both boxes.
+- Ensure BOTH rails for that group have IPv4 addresses on BOTH nodes (RoCE needs them).
+- Run: ssh ${HEAD_HOST} ibdev2netdev ; ssh ${WORKER_HOST} ibdev2netdev"
+}
+
+# ----------------------------
+# Main
+# ----------------------------
+log "Checking prerequisites..."
+require_cmd_on_node "$HEAD_HOST" ibdev2netdev
+require_cmd_on_node "$WORKER_HOST" ibdev2netdev
+require_cmd_on_node "$HEAD_HOST" docker
+require_cmd_on_node "$WORKER_HOST" docker
+
+log "Autodetecting linked Spark port group (dual-rail)..."
+pick_best_group
+
+log "Selected port group: ${PORT_GROUP}"
+log "Control-plane: ${OOB_IF}"
+log "Head IP:      ${HEAD_IP}"
+log "Worker IP:    ${WORKER_IP}"
+log "Head rail #2: ${RAIL_IF_B} = ${HEAD_RAIL_IP_B}"
+log "Worker rail#2:${RAIL_IF_B} = ${WORKER_RAIL_IP_B}"
+
+# NCCL: force dual-rail RDMA
+NCCL_HCA="=${RDMA_A}:1,${RDMA_B}:1"
+
+log "NCCL_IB_HCA=${NCCL_HCA}"
+log "NCCL_IB_QPS_PER_CONNECTION=${NCCL_IB_QPS_PER_CONNECTION}"
+
+# Common env
+ENV_COMMON=(
+  -e NCCL_NET_PLUGIN=none
+  -e NCCL_DMABUF_ENABLE=0
+  -e NCCL_NET_GDR_LEVEL=LOC
+  -e NCCL_NET_GDR_C2C=0
+  -e NCCL_IB_HCA="$NCCL_HCA"
+  -e NCCL_IB_QPS_PER_CONNECTION="$NCCL_IB_QPS_PER_CONNECTION"
+  -e NCCL_SOCKET_IFNAME="$OOB_IF"
+  -e GLOO_SOCKET_IFNAME="$OOB_IF"
+  -e RAY_memory_monitor_refresh_ms=0
+  -e HF_HUB_OFFLINE="$HF_HUB_OFFLINE"
+)
+
+if [[ "$DEBUG_NCCL" == "1" ]]; then
+  ENV_COMMON+=(
+    -e NCCL_DEBUG=INFO
+    -e NCCL_DEBUG_SUBSYS=INIT,NET
+    -e NCCL_DEBUG_FILE=/tmp/nccl.%h.%p.log
+  )
+  log "NCCL debug enabled (container logs under /tmp/nccl.*.log)"
+fi
+
+ENV_HEAD=("${ENV_COMMON[@]}" -e VLLM_HOST_IP="$HEAD_IP")
+ENV_WORKER=("${ENV_COMMON[@]}" -e VLLM_HOST_IP="$WORKER_IP")
+
+# Volumes
+VOLS=(
+  -v "${HF_CACHE_DIR}:/root/.cache/huggingface"
+)
+if [[ -f "$SITE_CUSTOMIZE" ]]; then
+  VOLS+=( -v "${SITE_CUSTOMIZE}:/usr/lib/python3.12/sitecustomize.py:ro" )
+fi
+
+RDMA_FLAGS=(--device=/dev/infiniband --ulimit memlock=-1 --cap-add=IPC_LOCK)
+
+log "=== Cleanup ==="
+ssh_run "$HEAD_HOST" "docker rm -f vllm-head 2>/dev/null || true"
+ssh_run "$WORKER_HOST" "docker rm -f vllm-worker 2>/dev/null || true"
+
+log "=== Debug: ibdev2netdev (Up links) ==="
+ssh_run "$HEAD_HOST" "ibdev2netdev | egrep '\(Up\)' || true"
+ssh_run "$WORKER_HOST" "ibdev2netdev | egrep '\(Up\)' || true"
+
+log "=== Starting Ray head on ${HEAD_HOST} ==="
+# Note: we deliberately pin Ray node IP to the control-plane IP we selected.
+ssh_run "$HEAD_HOST" "docker run -d --name vllm-head --gpus all --shm-size 16g \
+  --network host --ipc host \
+  ${RDMA_FLAGS[*]} \
+  ${ENV_HEAD[*]} \
+  ${VOLS[*]} \
+  ${CONTAINER} \
+  ray start --head --port=${RAY_PORT} --node-ip-address=${HEAD_IP} --block"
+
+log "Waiting for Ray head..."
+if [[ "$DRY_RUN" != "1" ]]; then
+  sleep 10
+fi
+
+log "=== Starting Ray worker on ${WORKER_HOST} ==="
+ssh_run "$WORKER_HOST" "docker run -d --name vllm-worker --gpus all --shm-size 16g \
+  --network host --ipc host \
+  ${RDMA_FLAGS[*]} \
+  ${ENV_WORKER[*]} \
+  ${VOLS[*]} \
+  ${CONTAINER} \
+  ray start --address=${HEAD_IP}:${RAY_PORT} --node-ip-address=${WORKER_IP} --block"
+
+log "Waiting for worker to join..."
+if [[ "$DRY_RUN" != "1" ]]; then
+  sleep 5
+fi
+
+log "=== Starting vLLM server on ${HEAD_HOST} ==="
+VLLM_ARGS=(
+  --tensor-parallel-size 2
+  --trust-remote-code
+  --enforce-eager
+  --quantization awq
+  --gpu-memory-utilization 0.75
+  --kv-cache-dtype fp8
+  --limit-mm-per-prompt.video 0
+  --host 0.0.0.0
+  --port "${VLLM_PORT}"
+)
+
+# vLLM forces VLLM_USE_RAY_COMPILED_DAG=1 for multi-node; keep default.
+
+ssh_run "$HEAD_HOST" "docker exec -d \
+  -e RAY_ADDRESS=${HEAD_IP}:${RAY_PORT} \
+  -e VLLM_ATTENTION_BACKEND=TRITON_ATTN \
+  vllm-head \
+  vllm serve ${MODEL} ${VLLM_ARGS[*]}"
+
+log "=== Done ==="
+log "Head container:   ssh ${HEAD_HOST} 'docker logs -f vllm-head'"
+log "Worker container: ssh ${WORKER_HOST} 'docker logs -f vllm-worker'"
+log "NCCL logs (if --debug): inside containers under /tmp/nccl.*.log"
+log "API (direct-link IP): http://${HEAD_IP}:${VLLM_PORT}/v1/chat/completions"
+```
+
+---
+
+## How to run it
+
+* Basic:
+
+  ```bash
+  ./start-vllm-multinode-dualrail.sh
+  ```
+* Force a specific port group if autodetect picks the “wrong” one (e.g., you have both ports cabled):
+
+  ```bash
+  ./start-vllm-multinode-dualrail.sh --port f0
+  ```
+* Debug NCCL:
+
+  ```bash
+  ./start-vllm-multinode-dualrail.sh --debug
+  ```
+* See commands without executing:
+
+  ```bash
+  ./start-vllm-multinode-dualrail.sh --dry-run
+  ```
+
+If this script errors with “missing IPv4 on one/both rails”, that’s not a script problem: you literally don’t have dual-rail RoCE configured yet (you need IPs on **both** `enp...` and `enP2p...` on both boxes).
+
+**TLDR**
+
+* Your **dual‑rail RoCE setup is working**. The NCCL log proves it’s using **both** `rocep1s0f1` and `roceP2p1s0f1`, and traffic is striped across **NET/IB/0** and **NET/IB/1**.
+* The two real problems I see are: **(1)** you launch `vllm serve` via `docker exec -d`, which **hides logs and can silently fail**; **(2)** your benchmark runs are getting **SIGKILL/exit 137**, which in your tooling is very plausibly **timeout-kill**, not necessarily “OOM”.
+* Next steps to make this repeatable: **log `vllm serve` output to a file + verify it’s alive**, then **measure the actual comm gain** with a quick NCCL bandwidth test and a controlled vLLM throughput test.
+
+---
+
+## 1) Dual‑rail RDMA: confirmed (you’re good here)
+
+This line is the smoking gun:
+
+* `NCCL INFO NET/IB : Using [0]rocep1s0f1:1/RoCE [1]roceP2p1s0f1:1/RoCE`
+
+And then the channel mapping alternates between `NET/IB/0` and `NET/IB/1`, which is exactly what you want for dual‑rail striping.
+
+Also:
+
+* `GPU Direct RDMA Disabled…` is expected on Spark in many configs; it doesn’t mean “not RDMA”, it means “not GPUDirect RDMA”.
+
+So: **the “dual rail while keeping RDMA” requirement is met.**
+
+---
+
+## 2) Your script’s weak link: `docker exec -d` makes failures invisible
+
+You already hit this: Ray was up, but **`vllm serve` wasn’t running**, and because it was started detached you had **no stdout/stderr**.
+
+### Fix: start vLLM with log redirection + a health check
+
+Replace your detached exec with something like:
+
+```bash
+ssh_run "$HEAD_HOST" "docker exec vllm-head bash -lc '
+  export RAY_ADDRESS=$HEAD_IP:$RAY_PORT
+  export VLLM_ATTENTION_BACKEND=TRITON_ATTN
+  nohup vllm serve $MODEL $VLLM_ARGS > /tmp/vllm-serve.log 2>&1 &
+  sleep 1
+  pgrep -f \"vllm serve\" >/dev/null || { echo \"vllm failed, tail:\"; tail -200 /tmp/vllm-serve.log; exit 1; }
+'"
+```
+
+Then your readiness check becomes deterministic and **local to the head** (no “wrong interface/IP” confusion):
+
+```bash
+ssh_run "$HEAD_HOST" "docker exec vllm-head bash -lc '
+  for i in \$(seq 1 120); do
+    curl -sf http://127.0.0.1:$VLLM_PORT/v1/models >/dev/null && exit 0
+    sleep 2
+  done
+  echo \"vLLM not ready, tail:\"; tail -200 /tmp/vllm-serve.log; exit 1
+'"
+```
+
+If you do only one thing: **do this**. It eliminates 80% of the “it’s running but not serving” ambiguity.
+
+---
+
+## 3) The exit code 137: don’t guess — classify it
+
+Exit **137 = SIGKILL**. In your pasted trace, it’s happening to long background steps (“wait 10 min …”) and larger benchmark runs. That pattern screams **tooling timeout kill** as much as it screams OOM.
+
+### Quick ways to tell which it is
+
+**If it’s OOM kill (kernel):**
+
+```bash
+dmesg -T | grep -i -E "oom|killed process" | tail -50
+```
+
+**If it’s Docker memory limit kill:**
+
+```bash
+docker inspect vllm-head --format '{{json .HostConfig.Memory}}'
+docker inspect vllm-worker --format '{{json .HostConfig.Memory}}'
+```
+
+**If it’s just your “agent runner” timing out:**
+You’ll see kills correlate with your tool’s time budgets (your log literally shows `timeout: 10m 0s`, `timeout: 11m 0s`), and `dmesg` will be clean.
+
+**My bet from your snippet:** it’s predominantly **tool timeouts**, because even a simple `sleep 600` got 137’d.
+
+---
+
+## 4) You may be benchmarking against the “wrong” IP (doesn’t break TP, but can confuse results)
+
+Your script advertises the API at:
+
+* `http://192.168.100.10:8000/...`
+
+But you were curling:
+
+* `http://192.168.102.11:8000/...`
+
+It worked because the server binds `0.0.0.0`, so it’s reachable on multiple interfaces. That’s fine, *but*:
+
+* If your benchmark client is not local, you might accidentally test via a **different network path** than you think.
+* The **important** network path for TP is **head↔worker**, not client↔head — but still, don’t add noise.
+
+Best practice for clean benchmarking:
+
+* Run the load generator **on the head** and hit `127.0.0.1:$VLLM_PORT` (client network becomes irrelevant).
+* Or hit `HEAD_IP` explicitly.
+
+---
+
+## 5) Make the performance win measurable (not vibes)
+
+You set up dual‑rail. Now prove it did something.
+
+### A) NCCL comm sanity check (expect roughly 2×)
+
+Run `all_reduce_perf` across the two nodes (TP=2 equivalent comm patterns). What you’re looking for:
+
+* “single-rail effective” tends to look like ~**11–13 GiB/s class** on a 100G-ish pipe
+* “dual-rail effective” should push toward ~**20–23 GiB/s class** (realistic payload + overhead dependent)
+
+If you don’t have nccl-tests handy, at least run a **single controlled** vLLM throughput test with identical settings and compare output tok/s before/after dual-rail.
+
+### B) vLLM throughput test: keep it tight
+
+Your “sweep” benchmarks (images, multiple concurrencies, resolutions) are extremely noisy and also long-running → timeout bait.
+
+Do this instead:
+
+* fix 1–2 prompt sizes (P50, P95)
+* fix concurrency (e.g., 8, 32)
+* fixed output length
+* 3 runs, report median
+
+That will actually tell you if dual‑rail moved the needle.
+
+---
+
+## 6) One tuning knob you’re missing (often matters for saturating both rails)
+
+Right now you’re only setting `NCCL_IB_HCA`. Consider adding:
+
+```bash
+-e NCCL_IB_QPS_PER_CONNECTION=4
+```
+
+Reason: it increases parallelism per connection and often helps saturate multi-rail on platforms like Spark where you’re effectively combining two 100G-ish paths.
+
+---
+
+## 7) What I would do next (in order)
+
+1. Patch the script to run `vllm serve` with `nohup … > /tmp/vllm-serve.log` and verify the PID exists.
+2. Run a **single, short** vLLM throughput benchmark from the head to `127.0.0.1`.
+3. Compare **dual‑rail vs forced single‑rail** by temporarily setting:
+
+   * dual: `NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'`
+   * single: `NCCL_IB_HCA='=rocep1s0f1:1'`
+4. Only after that, do the big sweep. Otherwise you’ll just burn time inside a kill-prone harness.
+
+---
+
+If you paste:
+
+* the exact command line your benchmark uses (especially concurrency + image sizes), and
+* where the benchmark is running (head vs laptop vs some other host),
+
+I can tell you whether exit 137 is *definitely* timeout vs OOM, and what the smallest benchmark that still reflects “real load” should be for Spark.
+
+**TLDR**
+On Spark‑2 you’re basically **CPU‑saturating the whole box**: `VLLM::EngineCore` is eating **~1655% CPU (~16.6 cores)** on a DGX Spark that only has **20 Arm cores total**. ([NVIDIA Docs][1]) That’s why load average is ~18 and you’re seeing **~60% “system” CPU**. The main driver is **vLLM’s EngineCore + Ray distributed execution** (often **tight polling / busy loops**, especially with **Ray compiled DAG**, which vLLM V1 enables by default under Ray). ([vLLM][2])
+If you’re seeing this **even when idle**, the blunt fix is **`VLLM_SLEEP_WHEN_IDLE=1`** (drops idle CPU hard, at the cost of a small wake-up latency). ([vLLM][3])
+
+---
+
+## Why Spark‑2 is hot (and Spark‑3 isn’t)
+
+You already spotted the important clue in `top`:
+
+* **`VLLM::EngineCore` ≈ 1655% CPU** → ~16.55 cores pegged
+* **`ray::RayWorkerWrapper` ≈ 90% CPU** → ~1 core
+* overall **~8.5% idle**, **~60.7% system** time
+
+That points to **one process burning a ton of cycles**, plus a lot of kernel time.
+
+Spark‑2 is the **head**. In a Ray + vLLM TP=2 setup, the head typically does:
+
+* scheduling / KV cache bookkeeping / request queueing (EngineCore),
+* tokenizer + request parsing,
+* multimodal preprocessing (image decode/resize/packing) when you’re serving VL.
+
+So the *“why”* is not mysterious: the head isn’t just a coordinator — it’s doing real work.
+
+But the *“why so much”* (16+ cores) is usually **polling behavior**, not “tokenizer is heavy”.
+
+---
+
+## The smoking gun: vLLM’s EngineCore is designed to poll
+
+vLLM’s EngineCore has explicit code paths where it can enter a **tight polling loop** and only yields briefly (e.g. a `time.sleep(0.001)` guard) so background threads can make progress. ([vLLM][4])
+That design is performance-friendly (low latency), but it can look like “why is this thing burning cores”.
+
+Separately, vLLM’s Ray executor can use **Ray Compiled DAG** (previously aDAG) to reduce control-plane overhead; and vLLM’s env var docs state this is **set to 1 by default in V1 when Ray distributed executor is used**. ([vLLM][2])
+There are real-world reports of **multiple CPU cores pegged at 100% even after a single inference** in Ray distributed setups. ([GitHub][5])
+
+So: your observed “EngineCore eats 16 cores” is consistent with **busy polling / compiled-DAG/channel plumbing**, not necessarily “actual inference CPU”.
+
+---
+
+## Quick fork: is it busy when idle or busy because you’re actually doing work?
+
+Don’t guess — check.
+
+### If you’re idle (no incoming requests) and it’s still pegged
+
+That’s the classic “spin when idle” behavior.
+
+Fix:
+
+* Add to the container env:
+
+  ```bash
+  -e VLLM_SLEEP_WHEN_IDLE=1
+  ```
+
+  This is explicitly documented as “reduce CPU usage when vLLM is idle” with a small latency penalty when requests resume. ([vLLM][3])
+
+This is the cleanest first move because it doesn’t change correctness or topology.
+
+### If you’re under real load (benchmarks, lots of images)
+
+Then high CPU on the head can be legitimate:
+
+* multimodal preprocessing is CPU-heavy,
+* tokenization / batching logic runs on CPU,
+* Ray overhead is non-trivial.
+
+In that case, the “fix” is mostly **move the load generator off the head** (so CPU is reserved for serving), and/or reduce preprocessing cost (pre-resize inputs, fewer images per request, etc.).
+
+---
+
+## Why this hurts more on DGX Spark than on server boxes
+
+DGX Spark has **20 cores total**. ([NVIDIA Docs][1])
+So if EngineCore burns ~16.6 cores, you’ve got ~3–4 cores left for:
+
+* the OS,
+* networking,
+* Ray head services,
+* HTTP server threads,
+* anything else you’re doing (bench client, monitoring, etc.).
+
+On a 64–128 core server, the same “spin/poll” behavior is annoying but tolerable. On Spark, it can become a real throughput + tail-latency limiter.
+
+Popular misconception: “GPU inference is GPU-bound; CPU doesn’t matter.”
+On Spark: **CPU absolutely matters** because the CPU budget is small and vLLM’s control plane can be aggressive.
+
+---
+
+## What I would do (minimal changes first)
+
+### 1) Enable idle sleep (if you care about idle CPU)
+
+In your docker run for both head + worker:
+
+```bash
+-e VLLM_SLEEP_WHEN_IDLE=1
+```
+
+([vLLM][3])
+
+### 2) Measure where the CPU is actually going (30 seconds, no drama)
+
+On spark‑2 host:
+
+```bash
+pidstat -t -p $(pgrep -f 'VLLM::E|EngineCore|vllm serve' | tr '\n' ',' | sed 's/,$//') 1 10
+mpstat -P ALL 1 10
+```
+
+If it’s polling, you’ll see:
+
+* lots of threads at ~100% (or high) with very little variability,
+* CPU stays high even when no requests are served.
+
+### 3) If it’s Ray compiled DAG related and you want to experiment
+
+vLLM exposes:
+
+* `VLLM_USE_RAY_COMPILED_DAG`
+* `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE` (`auto|nccl|shm`)
+  ([vLLM][2])
+
+You can try:
+
+```bash
+-e VLLM_USE_RAY_COMPILED_DAG=0
+```
+
+I’m not promising it’ll reduce CPU (sometimes it can increase overhead), but it’s a clean A/B lever, and vLLM explicitly documents this switch. ([vLLM][2])
+
+---
+
+## One more thing: your current config isn’t “dual rail”, so don’t blame dual rail
+
+From your env dump you showed:
+
+* `NCCL_IB_HCA==rocep1s0f1:1` → you’re pinned to **one** HCA/rail (the double `==` is just because the value begins with `=`).
+
+So your current CPU spike is not caused by “extra rail overhead”. It’s happening in **single‑rail** mode too.
+
+---
+
+If you paste:
+
+* whether you were actively running the image benchmark at the time of that `top`, and
+* `pidstat -t -p <EngineCorePID> 1 5` output,
+
+I can tell you in one look if it’s **idle spin** vs **real preprocessing/scheduling load**, and which knob will actually move the needle.
+
+[1]: https://docs.nvidia.com/dgx/dgx-spark/hardware.html?utm_source=chatgpt.com "Hardware Overview — DGX Spark User Guide"
+[2]: https://docs.vllm.ai/en/v0.9.1/configuration/env_vars.html "Environment Variables - vLLM"
+[3]: https://docs.vllm.ai/en/stable/configuration/env_vars/ "Environment Variables - vLLM"
+[4]: https://docs.vllm.ai/en/stable/api/vllm/v1/engine/core/ "core - vLLM"
+[5]: https://github.com/vllm-project/vllm/issues/21231 "[Bug]: 100% cpu usage on 3 cores on every node when using ray distributed pipeline parallel · Issue #21231 · vllm-project/vllm · GitHub"
+
+**TLDR**
+Yes — we can do a **clean A/B image benchmark** that actually answers the question you care about: “is the vision encoder still weight‑sharded TP, and should we flip it to batch‑DP (`--mm-encoder-tp-mode data`) for better performance?” Default is **`weights`** (i.e., encoder is sharded across TP ranks). ([vLLM][1])
+Run the exact same image sweep **twice**: once as‑is, then once with `--mm-encoder-tp-mode data` (and optionally `--skip-mm-profiling` if startup/profiling is flaky). Qwen3‑VL’s own vLLM recipe explicitly recommends `--mm-encoder-tp-mode data` for better performance because the encoder is small and TP communication overhead can dominate. ([vLLM][2])
+
+---
+
+## 0) Ground truth: what mode are we in *right now*?
+
+If you’re not passing `--mm-encoder-tp-mode`, you are in **default `weights`** mode (encoder weights sharded across TP ranks). ([vLLM][1])
+
+That’s “MM encoding in TP” in practical terms: it forces cross‑rank comm per encoder layer.
+
+---
+
+## 1) Benchmark run #1: baseline (current deployment)
+
+Goal: capture a reproducible baseline for **req/s** and **img_tok/s** across resolution + concurrency.
+
+### Run it from a client that won’t steal head CPU
+
+If you have a third node (e.g. spark‑1), run the benchmark there. Otherwise run on the head but be aware you’re competing with EngineCore.
+
+### Command pattern (use your existing script)
+
+You previously ran something like:
+
+```bash
+python3 /home/tom/llm/benchmark_vllm.py --sweep -t 256
+```
+
+Do the same, but **log it** and **pin the URL** so you’re not accidentally hitting a different NIC:
+
+```bash
+TS=$(date +%F_%H%M%S)
+export VLLM_BASE_URL="http://192.168.100.10:8000"   # adjust if your script uses a different var
+python3 /home/tom/llm/benchmark_vllm.py --sweep -t 256 2>&1 | tee bench_mm_weights_${TS}.log
+```
+
+If your script doesn’t read `VLLM_BASE_URL`, just add whatever flag it supports (`--base-url`, `--host`, etc.). The point is: **keep it constant** across the A/B.
+
+### Optional: collect CPU/GPU context so results are interpretable
+
+On spark‑2 during the benchmark:
+
+```bash
+mpstat -P ALL 1 20
+```
+
+This tells you if you’re CPU‑bound (common on Spark heads).
+
+---
+
+## 2) Switch config: enable batch‑DP vision encoder
+
+For Qwen3‑VL, vLLM explicitly says:
+
+* `--mm-encoder-tp-mode data` runs the vision encoder in a **data-parallel fashion** for better performance (encoder is small; TP brings little gain and adds comm overhead)
+* It **uses more memory**, so you may need to lower `--gpu-memory-utilization` ([vLLM][2])
+
+### Change only ONE thing
+
+Add to your `vllm serve` args:
+
+```bash
+--mm-encoder-tp-mode data
+```
+
+([vLLM][1])
+
+If you’ve previously seen “hangy” startup behavior (profiling), add:
+
+```bash
+--skip-mm-profiling
+```
+
+This skips multimodal memory profiling to reduce init time (but puts memory safety on you). ([vLLM][1])
+
+### Practical safe starting point
+
+If you’re already near the memory edge, drop:
+
+```bash
+--gpu-memory-utilization 0.75
+```
+
+to e.g.
+
+```bash
+--gpu-memory-utilization 0.70
+```
+
+(because DP replicates encoder weights). vLLM’s Qwen3‑VL recipe warns you might need to adjust this. ([vLLM][2])
+
+### Verify it actually took effect
+
+Make sure your server logs include something indicating the encoder TP mode. If it silently falls back (model doesn’t support DP), vLLM can fall back to `weights`. ([vLLM][3])
+
+---
+
+## 3) Benchmark run #2: same sweep, same conditions
+
+Run the exact same benchmark again:
+
+```bash
+TS=$(date +%F_%H%M%S)
+export VLLM_BASE_URL="http://192.168.100.10:8000"
+python3 /home/tom/llm/benchmark_vllm.py --sweep -t 256 2>&1 | tee bench_mm_data_${TS}.log
+```
+
+---
+
+## 4) What you should expect (and what would falsify it)
+
+### Expected if `data` is helping (common for VL models)
+
+You should see:
+
+* **higher req/s** and/or **higher img_tok/s** at **moderate+ concurrency** (e.g. 8/16/32),
+* biggest gains at larger images (more encoder work),
+* sometimes better stability (less comm contention).
+
+This aligns with vLLM’s own rationale: encoder is small, TP gives little benefit but adds **all-reduce per layer**, so DP can win. ([vLLM][4])
+
+### If you see no change
+
+Likely causes:
+
+* your batch rarely contains >1 image per step (DP can’t split),
+* you’re **CPU‑bound** on preprocessing/scheduling (Spark head), not comm‑bound,
+* vLLM fell back to `weights` (DP unsupported).
+
+### If it gets worse
+
+Also plausible:
+
+* you’re memory‑pressure‑bound (more encoder replication reduces KV cache headroom),
+* you’re in low concurrency (DP wastes a GPU on encoder work when there’s nothing to split).
+
+---
+
+## What I need from you after you run it
+
+Paste the two benchmark tables (weights vs data) and I’ll compute:
+
+* per-resolution speedups,
+* where the crossover happens (what concurrency makes DP worth it),
+* whether you’re CPU‑limited (based on the shape of the curves).
+
+If you want the “no ambiguity” version: I’ll also give you a tiny parser that turns both logs into a CSV and prints the deltas.
+
+[1]: https://docs.vllm.ai/en/stable/configuration/engine_args/ "Engine Arguments - vLLM"
+[2]: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html?utm_source=chatgpt.com "Qwen3-VL Usage Guide - vLLM Recipes"
+[3]: https://docs.vllm.ai/en/latest/api/vllm/config/multimodal/?utm_source=chatgpt.com "vllm.config.multimodal"
+[4]: https://docs.vllm.ai/en/stable/configuration/optimization/?utm_source=chatgpt.com "Optimization and Tuning - vLLM"
+
+**TLDR**
+
+* For **Qwen3‑VL‑235B‑A22B**, switching vLLM’s vision encoder to batch‑level DP (`--mm-encoder-tp-mode data`) likely costs only **~0.4 GB (~381 MiB) extra memory per Spark** in your **TP=2** setup (because the vision encoder is ~**0.4B params** ≈ **0.75 GiB** in FP16/BF16, and DP stops sharding it). ([rocm.blogs.amd.com][1])
+* The **bigger RAM hog** is often vLLM’s **multimodal processor cache** (default **4 GiB**, duplicated by process count), not the encoder weights. ([vLLM][2])
+* Best config on **2× DGX Spark** for your model: **TP=2 + `--mm-encoder-tp-mode data` + FP8 KV + sane max context (e.g., 32k)**, and only use **dual‑rail RoCE** if your benchmarks show a real win (Spark’s NIC throughput is often **PCIe‑limited**, so “2 rails = 2× perf” is not a safe assumption). ([vLLM][3])
+
+---
+
+## How much extra RAM does `--mm-encoder-tp-mode data` take?
+
+### What the flag actually changes (first principles)
+
+vLLM has two *encoder TP modes*: ([vLLM][2])
+
+* **`weights` (default):** vision encoder weights are **sharded** across TP ranks (TP behavior).
+* **`data`:** vision encoder weights are **replicated** on each TP rank, and the *batch* is split across ranks (batch-level DP), avoiding per-layer all-reduces during the encoder forward pass.
+
+So the memory delta is basically:
+
+[
+\text{extra per rank} \approx \text{encoder_weights_size} \times (1 - \frac{1}{TP})
+]
+
+For **TP=2**, that’s **~50% of the encoder weights** *per rank*.
+
+### Qwen3‑VL’s vision encoder size
+
+Qwen’s own team confirmed the vision encoder is initialized from **SigLIP2 so400m** (“so400m” is the ~400M class). ([Hugging Face][4])
+AMD’s writeup on vLLM DP‑vision also lists **Qwen3‑VL‑235B‑A22B-Instruct encoder size = 0.4B params**. ([rocm.blogs.amd.com][1])
+
+### Convert that into bytes
+
+Assuming the vision encoder weights are in **FP16/BF16** (2 bytes/param — typical for inference; AWQ mainly hits the LLM, not necessarily the vision tower):
+
+* Encoder params: **0.4B**
+* Bytes/param: **2**
+* Total encoder weights:
+  **0.4e9 × 2 = 0.8e9 bytes ≈ 0.75 GiB**
+
+Now compare modes with **TP=2**:
+
+| Mode                |     Encoder weights per rank |             Extra vs weights-mode |
+| ------------------- | ---------------------------: | --------------------------------: |
+| `weights` (sharded) | ~0.75 GiB / 2 = **0.37 GiB** |                          baseline |
+| `data` (replicated) |                 **0.75 GiB** | **+0.37 GiB (~381 MiB, ~0.4 GB)** |
+
+So on **two Sparks**, total extra memory across the cluster is ~**0.75 GiB (~0.8 GB)**, split as ~**0.37 GiB per node**.
+
+### Reality check: what can dwarf this?
+
+vLLM’s **mm processor cache** defaults to **4 GiB** and is duplicated across processes, with total memory roughly:
+
+[
+\text{mm_processor_cache_gb} \times (\text{api_server_count} + \text{data_parallel_size})
+]
+
+That can easily be **8 GiB** in common layouts—way bigger than the ~0.4 GB you’re sweating here. ([vLLM][2])
+
+---
+
+## Should you actually use mm-encoder DP on 2× Spark?
+
+### Popular opinion
+
+“Turn it on. The vision encoder is small; sharding it just adds communication. DP should be faster.”
+
+That’s broadly consistent with how the feature is described and why it exists. ([vLLM][2])
+
+### My conclusion (for *your* 2-node case)
+
+**Yes, it’s usually the right move to try first**, because:
+
+* Your encoder is **small (~0.4B)**, so TP sharding gives little compute benefit but adds cross-node sync. ([rocm.blogs.amd.com][1])
+* You’re on **two nodes**, so every “all‑reduce per encoder layer” is **inter-node** (worst case).
+* The memory cost is **sub‑GiB per node**, which is noise compared to Spark’s **128GB unified pool**. ([ServeTheHome][5])
+
+But don’t expect miracles:
+
+* AMD’s measurements for Qwen3‑VL show an average gain around **~6%** and “not highly consistent” (bigger wins at larger image sizes / more items). ([Hugging Face][6])
+* On TP=2 with real inter-node comm, you *might* see more benefit than their setup—or you might not, depending on whether your bottleneck is actually the encoder or the vLLM/Ray orchestration.
+
+---
+
+## Best config on dual DGX Spark for your model (and generally)
+
+I’m going to be blunt: on **2× Spark**, your best config is usually the one that **minimizes inter-node communication** and **keeps head CPU from becoming the throttle**, because Spark is a unified-memory, CPU+GPU SoC box and multi-node overhead shows up fast.
+
+### 1) For your current model (Qwen3‑VL‑235B‑A22B‑Instruct‑AWQ) on 2 nodes
+
+**Core flags I’d run:**
+
+* `--tensor-parallel-size 2`
+* `--mm-encoder-tp-mode data`  *(low risk, small memory hit, likely helps)*
+* `--kv-cache-dtype fp8` *(you’re already doing this; keep it)*
+* `--limit-mm-per-prompt.video 0` *(keep; video explodes tokens)*
+* **Set `--max-model-len` explicitly** (ex: **32768**) unless you truly need huge context
+
+  * Your AWQ model card examples use **32k**. ([Hugging Face][7])
+* Consider `--async-scheduling` (vLLM’s Qwen3‑VL guide uses it heavily). ([vLLM][8])
+
+**CPU sanity:**
+
+* Set `OMP_NUM_THREADS=1` (vLLM Qwen3‑VL guide calls this out). ([vLLM][3])
+  This doesn’t fix all Ray/vLLM overhead, but it avoids death-by-threading in preprocessing.
+
+**RAM sanity (often overlooked):**
+
+* If host RAM is getting crushed, reduce mm cache:
+
+  * `--mm-processor-cache-gb 1` (or 2), not the default 4. ([vLLM][2])
+
+### 2) Dual-rail vs single-rail on Spark: don’t assume dual wins
+
+**Popular opinion:** dual-rail should be faster (2× links).
+**Spark reality:** your NIC is a ConnectX‑7, but on Spark it’s often constrained by **PCIe Gen5 x4**, and people have measured **~96 Gbps total** even when using both ports with iperf. That strongly suggests the box can be *bus-limited* before you ever benefit from dual-rail. ([ServeTheHome][5])
+
+So for Spark specifically:
+
+* **Default recommendation:** **single-rail RoCE** for simplicity + fewer moving parts.
+* **Enable dual-rail only if your benchmarks show improvement** (and your head CPU isn’t already saturated by EngineCore/Ray).
+
+### 3) “Best in general” for 2× Spark (not model-specific)
+
+If you’re choosing what to deploy:
+
+* **Best latency/throughput per watt:** pick a model that fits on **one Spark** (avoid inter-node TP entirely).
+* If you must go multi-node TP:
+
+  * Prefer architectures that reduce comm (MoE can help *if* configured right)
+  * Use encoder DP for multimodal towers
+  * Keep context length conservative
+  * Avoid “clever” networking unless proven
+
+---
+
+## What I would do next (pragmatic)
+
+Run **two quick A/B benchmarks**:
+
+1. Current setup but add:
+
+* `--mm-encoder-tp-mode data`
+
+2. Same as (1) but also shrink mm cache:
+
+* `--mm-processor-cache-gb 1`
+
+Keep everything else constant. If you don’t see at least a few percent on your image-heavy benchmark, then your bottleneck isn’t encoder comm—it’s elsewhere (often head CPU / Ray / unified memory behavior).
+
+If you paste your exact vLLM command line + the image benchmark script you’re using (or its args), I can suggest the *specific* knobs that are most likely to move the needle on **Spark** rather than generic vLLM advice.
+
+[1]: https://rocm.blogs.amd.com/software-tools-optimization/vllm-dp-vision/README.html?utm_source=chatgpt.com "The One-Line Optimization for Large Multimodal Models"
+[2]: https://docs.vllm.ai/en/stable/configuration/engine_args/ "Engine Arguments - vLLM"
+[3]: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html "Qwen3-VL Usage Guide - vLLM Recipes"
+[4]: https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct/discussions/1 "Qwen/Qwen3-VL-235B-A22B-Instruct · Is the Qwen3-VL Vision Encoder Based on siglip2-so400m-patch16?"
+[5]: https://www.servethehome.com/nvidia-dgx-spark-review-the-gb10-machine-is-so-freaking-cool/2/ "NVIDIA DGX Spark Review The GB10 Machine is so Freaking Cool - Page 2 of 4 - ServeTheHome"
+[6]: https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct/discussions "Qwen/Qwen3-VL-235B-A22B-Instruct · Discussions"
+[7]: https://huggingface.co/QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ "QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ · Hugging Face"
+[8]: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html?utm_source=chatgpt.com "Qwen3-VL Usage Guide - vLLM Recipes"
+
+**TLDR**
+
+* In **vLLM**, there isn’t really a “mixed chunking” switch; the thing people usually mean is **chunked prefill** (aka *mixing prefill chunks with decode in the same batches*).
+* For **Qwen 235B (MoE)** on **two DGX Spark** boxes, **yes, you generally want this behavior ON** for real serving (multiple users / variable prompt lengths). In **vLLM V1 it’s already enabled by default**; you mostly tune `--max-num-batched-tokens`. ([vLLM][1])
+* **Only consider turning it OFF** if you’re doing **single-stream benchmarks** or ultra-low concurrency where you only care about the absolute minimum **TTFT** (time-to-first-token). Chunking adds some overhead and can slightly increase TTFT. ([Hugging Face][2])
+* If by “chunking” you actually meant **Dual Chunk Attention (1M context)**: that’s a *different* feature with different flags, and it can be brittle across versions. ([Hugging Face][3])
+
+---
+
+## What “mixed chunking” maps to in vLLM
+
+A lot of people pick up the term from **SGLang** (`--enable-mixed-chunk`) — that’s basically a scheduler strategy that **chunks long prefills and mixes them with decode** so long prompts don’t “freeze” everyone else.
+
+In **vLLM**, the equivalent concept is **Chunked Prefill**:
+
+* vLLM processes large prefills in **smaller chunks** and **batches them together with decode** requests. ([vLLM][1])
+* In **vLLM V1**, this is **enabled by default whenever possible**, and the scheduler **prioritizes decode** first, then fills remaining token budget with prefill chunks. ([vLLM][1])
+
+So: if you’re on V1, you’re probably already “doing mixed chunking” without realizing it.
+
+---
+
+## Should you enable it for Qwen 235B on dual DGX Spark?
+
+### My conclusion (from first principles)
+
+**Yes for production / multi-user serving.** Prefill is typically **compute-heavy**, decode is typically **memory-bandwidth bound**; mixing them is a straightforward way to keep the machine busier instead of alternating between “compute saturated” and “bandwidth saturated.” Chunking prevents one giant prefill from dominating the step time and stalling decode for everyone else. ([vLLM][1])
+
+### The “popular opinion”
+
+“Leave chunked prefill on; it’s a good default.” For example, a team article describing large-scale vLLM serving reported **~+50% total token throughput** improvement from chunked prefill in a standard deployment, and they enabled it everywhere. ([Hugging Face][2])
+
+### When I would *not* bother
+
+* **Single user, one request at a time, short prompts**: chunking doesn’t help much because there’s nothing else to overlap with; it can add overhead and slightly worsen TTFT. ([Hugging Face][2])
+* **If you’re chasing a “best possible TTFT” leaderboard number** at QPS≈0: you might prefer contiguous prefill.
+
+---
+
+## The knob that actually matters: `--max-num-batched-tokens`
+
+In vLLM V1, the practical control for how “aggressive” chunked prefill behaves is `max_num_batched_tokens`:
+
+* **Smaller** (example given: **2048**) → **better ITL** (inter-token latency) because fewer prefills slow down decodes. ([vLLM][1])
+* **Larger** → **better TTFT** because you can process more prompt tokens per batch. ([vLLM][1])
+* vLLM docs explicitly recommend **`> 8192` for throughput** (especially on big GPUs / smaller models). ([vLLM][1])
+
+### Practical starting points for *two-node* DGX Spark
+
+Two-node adds more communication overhead per forward pass, so you generally don’t want absurdly tiny chunk sizes that explode the number of iterations.
+
+I’d start like this (and then sweep):
+
+* **Interactive chat (smooth streaming)**: `--max-num-batched-tokens 2048` or `4096`
+* **Throughput / batch jobs**: `--max-num-batched-tokens 8192` or `16384`
+
+Those numbers aren’t magic; they’re just aligned with vLLM’s own guidance about ITL vs TTFT vs throughput. ([vLLM][1])
+
+---
+
+## Dual DGX Spark reality check
+
+Two DGX Spark systems are explicitly positioned to run larger models by linking them:
+
+* Each DGX Spark has **128 GB coherent unified system memory**. ([NVIDIA][4])
+* NVIDIA says **ConnectX networking can connect two DGX Spark systems** to work with models **up to 405B parameters**, and lists a **ConnectX-7 NIC @ 200 Gbps**. ([NVIDIA][4])
+
+So, yes, **“Qwen 235B” is in the envelope** of what the dual system is meant to tackle *in principle*. But: chunked prefill won’t fix the hard parts (weight memory footprint, KV cache pressure, inter-node comm). It only helps scheduling/overlap.
+
+Also note vLLM’s own warning: if you hit **KV-cache preemption**, you’ll see recompute and latency pain; vLLM suggests increasing `gpu_memory_utilization` or TP, or **decreasing `max_num_seqs` / `max_num_batched_tokens`** to reduce KV pressure. ([vLLM][1])
+
+---
+
+## If your real question is “Qwen 235B with 1M context”
+
+If you mean the Qwen “1M context” / Dual Chunk Attention setup (common in Qwen model cards):
+
+* You’ll be looking at **`VLLM_ATTENTION_BACKEND=DUAL_CHUNK_FLASH_ATTN`** plus **`--enforce-eager`** and **`--enable-chunked-prefill`**, and typically extremely low concurrency (`--max-num-seqs 1`). ([Hugging Face][3])
+* This path has had version-sensitive issues (e.g., hangs/crashes reported for dual chunk attention in some vLLM commits). ([GitHub][5])
+
+So: only go there if you *really* need ultra-long context. Otherwise it’s complexity and risk for little benefit.
+
+---
+
+## A “don’t guess, measure” micro-plan (fast sanity check)
+
+If you want to be rigorous, run two serving benchmarks (same traffic):
+
+1. **Chunked prefill effectively ON** (V1 default; pick `max_num_batched_tokens`)
+2. **Make it behave like prefill-first** by setting `max_num_batched_tokens ≈ max_model_len` (vLLM notes this is close to the old behavior, though still decode-prioritized). ([vLLM][1])
+
+Compare:
+
+* **TTFT p50/p99**
+* **ITL p50/p99**
+* **Total tokens/sec**
+
+Under real concurrency, chunked prefill usually wins on ITL and throughput; under QPS≈0, it’s often neutral or slightly worse on TTFT. ([Hugging Face][2])
+
+---
+
+### Bottom line
+
+If you’re serving real traffic on dual DGX Spark: **don’t disable the vLLM equivalent of “mixed chunking.”** Keep **chunked prefill / mixed prefill+decode batching** and tune `--max-num-batched-tokens` to your latency-vs-throughput goal. ([vLLM][1])
+
+[1]: https://docs.vllm.ai/en/stable/configuration/optimization/ "https://docs.vllm.ai/en/stable/configuration/optimization/"
+[2]: https://huggingface.co/blog/tngtech/llm-performance-prefill-decode-concurrent-requests "https://huggingface.co/blog/tngtech/llm-performance-prefill-decode-concurrent-requests"
+[3]: https://huggingface.co/Qwen/Qwen3-235B-A22B-Thinking-2507 "https://huggingface.co/Qwen/Qwen3-235B-A22B-Thinking-2507"
+[4]: https://www.nvidia.com/en-us/products/workstations/dgx-spark/ "https://www.nvidia.com/en-us/products/workstations/dgx-spark/"
+[5]: https://github.com/vllm-project/vllm/issues/20484 "https://github.com/vllm-project/vllm/issues/20484"
+
+
