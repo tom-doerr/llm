@@ -298,6 +298,9 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Key:** Larger images benefit most from batching. Very noisy under concurrent load
 
+**Metrics note:** `prompt_tokens_total` includes cache hits. Real prefill compute = queries - hits.
+**Chunked prefill:** Enabled by default in vLLM V1. Tune via `--max-num-batched-tokens`.
+
 **Port:** 8000 (default). Use same port for vLLM/SGLang for consistent client code.
 
 **Access from spark-1:** Use 10GbE IP `192.168.102.11:8000` (200G IPs only work between spark-2/spark-3)
@@ -332,6 +335,25 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 **Multi-node limitation:** vLLM V1 forces compiled DAG on. `VLLM_USE_RAY_COMPILED_DAG=0` ignored.
 
 **Result:** CPU idle 8%→78%, load avg 18→3. Small latency cost on wake-up (acceptable).
+
+**Additional CPU tuning options:**
+```bash
+-e OMP_NUM_THREADS=1        # Reduce threading in preprocessing
+-e RAY_DEDUP_LOGS=1         # Reduce Ray logging overhead
+--mm-processor-cache-gb 1   # Reduce image cache (default 4GB)
+```
+
+### GPU Idle Power (NCCL Polling)
+
+Multi-node TP causes **~96% GPU util even when idle** due to NCCL busy-polling.
+Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
+**No fix** - accept power cost or stop vLLM when not in use.
+
+### Head vs Worker Clock Speeds
+
+Worker (spark-3) runs higher clocks: ~2400 MHz, 85W (pure tensor compute).
+Head (spark-2) runs lower: ~2100 MHz, 60W (mixed scheduling + compute).
+This is normal - pure matmul workloads boost higher.
 
 ## Model Cache (Jan 2026)
 
