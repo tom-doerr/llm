@@ -336,12 +336,10 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **Result:** CPU idle 8%→78%, load avg 18→3. Small latency cost on wake-up (acceptable).
 
-**Additional CPU tuning options:**
-```bash
--e OMP_NUM_THREADS=1        # Reduce threading in preprocessing
--e RAY_DEDUP_LOGS=1         # Reduce Ray logging overhead
---mm-processor-cache-gb 1   # Reduce image cache (default 4GB)
-```
+**CPU tuning (in script):**
+- `OMP_NUM_THREADS=1` - Enabled, reduces threading overhead
+- `RAY_DEDUP_LOGS=1` - Optional, reduces log overhead
+- `--mm-processor-cache-gb 1` - Optional, reduces image cache
 
 ### GPU Idle Power (NCCL Polling)
 

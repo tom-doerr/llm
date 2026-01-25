@@ -20,6 +20,7 @@ ENV="$ENV -e GLOO_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
 ENV="$ENV -e VLLM_SLEEP_WHEN_IDLE=1"  # Reduce CPU when idle (small latency cost)
+ENV="$ENV -e OMP_NUM_THREADS=1"  # Reduce threading overhead (vLLM Qwen3-VL recommended)
 # Note: VLLM_USE_RAY_COMPILED_DAG=0 doesn't work for multi-node - vLLM forces it to 1
 
 if [ "$DEBUG_NCCL" = "1" ]; then
