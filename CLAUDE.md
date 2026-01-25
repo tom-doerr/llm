@@ -363,9 +363,10 @@ cat /sys/class/infiniband/rocep1s0f1/ports/1/counters/port_xmit_data
 ```
 If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.sh --debug`
 
-### Scheduler Defaults
+### Scheduler Tuning
 
-**`max_num_batched_tokens`:** Defaults to `max_model_len` (256K). Lower values (2K-8K) improve ITL.
+**`max_num_batched_tokens`:** Default 8192 (≥70GB GPU). We use 32768 (4x) for throughput.
+Higher = better throughput/TTFT, worse ITL. Lower = smoother streaming.
 
 ## Model Cache (Jan 2026)
 

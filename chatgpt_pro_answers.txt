@@ -3119,3 +3119,105 @@ If you’re serving real traffic on dual DGX Spark: **don’t disable the vLLM e
 [5]: https://github.com/vllm-project/vllm/issues/20484 "https://github.com/vllm-project/vllm/issues/20484"
 
 
+**TLDR**
+I can’t literally edit your files from here, but here’s the exact patch I’d apply to your start script: cap CPU thread fan‑out (`OMP/MKL/BLAS/NUMEXPR`), ensure idle sleeping (`VLLM_SLEEP_WHEN_IDLE=1`), dedup Ray logs (`RAY_DEDUP_LOGS=1`), reduce multimodal processor cache (`--mm-processor-cache-gb 1`), and cut logging overhead (`--disable-log-stats`, `--disable-uvicorn-access-log`, `--uvicorn-log-level warning`). No redeploy/restart needed until you choose.
+
+---
+
+## 1) Patch for a “bare metal” start script (runs `vllm serve` directly)
+
+Apply this pattern to your `start_spark2.sh` (or whatever it’s called):
+
+```diff
+diff --git a/start_spark2.sh b/start_spark2.sh
+--- a/start_spark2.sh
++++ b/start_spark2.sh
+@@ -1,8 +1,35 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+
++# -------------------------
++# CPU / log throttles (safe)
++# -------------------------
++# Cap common CPU thread pools (prevents surprise 32/64-thread fan-out)
++export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
++export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
++export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
++export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
++export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
++
++# vLLM: reduce CPU usage when idle (small latency penalty when a request arrives)
++export VLLM_SLEEP_WHEN_IDLE="${VLLM_SLEEP_WHEN_IDLE:-1}"
++
++# vLLM: quieter logs (less work formatting/printing INFO spam)
++export VLLM_LOGGING_LEVEL="${VLLM_LOGGING_LEVEL:-WARNING}"
++
++# Ray: deduplicate logs (cuts log churn)
++export RAY_DEDUP_LOGS="${RAY_DEDUP_LOGS:-1}"
++
+ # ... your existing env/model settings here ...
+ # MODEL=...
+ # PORT=...
+
+-vllm serve "$MODEL" --host 0.0.0.0 --port "$PORT" \
++vllm serve "$MODEL" --host 0.0.0.0 --port "$PORT" \
++  --mm-processor-cache-gb "${MM_PROCESSOR_CACHE_GB:-1}" \
++  --disable-log-stats \
++  --disable-uvicorn-access-log \
++  --uvicorn-log-level warning \
++  --disable-log-requests \
+   ${VLLM_EXTRA_ARGS:-}
+```
+
+Why these exact flags/vars:
+
+* `--mm-processor-cache-gb`: default is **4 GiB**; setting to **1 GiB** cuts that cache by **75%**, and vLLM notes it gets duplicated per API process and DP size. ([docs.vllm.ai][1])
+* `VLLM_SLEEP_WHEN_IDLE=1` is explicitly documented to reduce CPU usage when vLLM is idle (with a small latency penalty when requests resume). ([docs.vllm.ai][2])
+* `--disable-log-stats`, `--disable-uvicorn-access-log`, `--uvicorn-log-level warning` are all supported server args and reduce logging overhead. ([docs.vllm.ai][3])
+* `--disable-log-requests` is marked **deprecated** in current docs (request logging is controlled by `--enable-log-requests`), but keeping it is a decent “belt-and-suspenders” move for older deployments where request logging used to be on by default. ([docs.vllm.ai][3])
+
+---
+
+## 2) Patch if your script starts vLLM via `docker run`
+
+If your script does `docker run … vllm serve …`, you must pass env vars into the container:
+
+```diff
+ docker run --rm \
++  -e OMP_NUM_THREADS=1 \
++  -e MKL_NUM_THREADS=1 \
++  -e OPENBLAS_NUM_THREADS=1 \
++  -e NUMEXPR_NUM_THREADS=1 \
++  -e TOKENIZERS_PARALLELISM=false \
++  -e VLLM_SLEEP_WHEN_IDLE=1 \
++  -e VLLM_LOGGING_LEVEL=WARNING \
++  -e RAY_DEDUP_LOGS=1 \
+   ...your existing mounts/ports/gpus... \
+   your-vllm-image:tag \
+   vllm serve "$MODEL" --host 0.0.0.0 --port "$PORT" \
++    --mm-processor-cache-gb 1 \
++    --disable-log-stats \
++    --disable-uvicorn-access-log \
++    --uvicorn-log-level warning \
++    --disable-log-requests \
+     ${VLLM_EXTRA_ARGS:-}
+```
+
+Same rationale/citations as above. ([docs.vllm.ai][1])
+
+---
+
+## 3) Notes (skeptical take)
+
+* **Reducing CPU doesn’t magically lower GPU power** unless the CPU churn is *preventing* the GPU from entering lower power states (e.g., constant polling / tiny kernels / log-induced synchronization). This patch is mostly about eliminating **idle CPU burn + log churn** and **multimodal preproc overhead**; GPU power might drop *only if* those were keeping the GPU “awake.”
+* The **most likely win** for GPU power is still: fewer tokens/sec, fewer concurrent sequences, or better idle behavior. CPU tweaks are “supporting actors.”
+
+---
+
+If you paste your current start script here (or just the `docker run` / `vllm serve` line), I’ll return a *precise* diff against your exact file instead of this generic patch.
+
+[1]: https://docs.vllm.ai/en/stable/configuration/engine_args/ "Engine Arguments - vLLM"
+[2]: https://docs.vllm.ai/en/stable/configuration/env_vars/?utm_source=chatgpt.com "Environment Variables - vLLM"
+[3]: https://docs.vllm.ai/en/stable/cli/serve/ "vllm serve - vLLM"
+
+
