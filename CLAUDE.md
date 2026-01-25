@@ -355,6 +355,18 @@ Worker (spark-3) runs higher clocks: ~2400 MHz, 85W (pure tensor compute).
 Head (spark-2) runs lower: ~2100 MHz, 60W (mixed scheduling + compute).
 This is normal - pure matmul workloads boost higher.
 
+### Verify RoCE/IB is Active (not Socket)
+
+Check RDMA counters are incrementing during inference:
+```bash
+cat /sys/class/infiniband/rocep1s0f1/ports/1/counters/port_xmit_data
+```
+If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.sh --debug`
+
+### Scheduler Defaults
+
+**`max_num_batched_tokens`:** Defaults to `max_model_len` (256K). Lower values (2K-8K) improve ITL.
+
 ## Model Cache (Jan 2026)
 
 **spark-2** (~700GB): AWQ Instruct/Thinking (116+117G), NVFP4 variants (127G each), BF16 Thinking (214G)
