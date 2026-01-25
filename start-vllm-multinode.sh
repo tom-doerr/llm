@@ -1,10 +1,14 @@
 #!/bin/bash
 # Start vLLM multi-node on spark-2 (head) + spark-3 (worker)
-# Usage: ./start-vllm-multinode.sh [--debug]
+# Usage: ./start-vllm-multinode.sh [--debug] [--pp]
 set -e
 
 DEBUG_NCCL=${DEBUG_NCCL:-0}
-[[ "$1" == "--debug" ]] && DEBUG_NCCL=1
+USE_PP=${USE_PP:-0}
+for arg in "$@"; do
+  [[ "$arg" == "--debug" ]] && DEBUG_NCCL=1
+  [[ "$arg" == "--pp" ]] && USE_PP=1
+done
 
 MODEL="QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
 CONTAINER="nvcr.io/nvidia/vllm:25.11-py3"
@@ -62,7 +66,13 @@ echo "Waiting for worker to join..."
 sleep 5
 
 echo "=== Starting vLLM server ==="
-VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code --enforce-eager"
+if [ "$USE_PP" = "1" ]; then
+  echo "Mode: Pipeline Parallel (PP=2)"
+  VLLM_ARGS="--pipeline-parallel-size 2 --trust-remote-code --enforce-eager"
+else
+  echo "Mode: Tensor Parallel (TP=2)"
+  VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code --enforce-eager"
+fi
 VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.75"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8 --limit-mm-per-prompt.video 0"
 # --mm-encoder-tp-mode data disabled - hangs encoder profiling in multi-node

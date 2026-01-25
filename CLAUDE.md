@@ -366,6 +366,13 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 **`max_num_batched_tokens`:** Default 8192 (≥70GB GPU). We use 32768 (4x) for throughput.
 Higher = better throughput/TTFT, worse ITL. Lower = smoother streaming.
 
+### TP vs PP Mode
+
+**TP (default):** `./start-vllm-multinode.sh` - Tensor parallel, splits layers across GPUs
+**PP mode:** `./start-vllm-multinode.sh --pp` - Pipeline parallel, each GPU runs different layers
+
+PP mode tested but showed 0 throughput with high concurrency. TP mode recommended.
+
 ## Model Cache (Jan 2026)
 
 **spark-2** (~700GB): AWQ Instruct/Thinking (116+117G), NVFP4 variants (127G each), BF16 Thinking (214G)
