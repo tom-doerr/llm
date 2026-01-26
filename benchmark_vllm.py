@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Benchmark vLLM server."""
-import argparse, asyncio, time, aiohttp, random, string, base64, io
+import argparse, asyncio, time, aiohttp, random, string, base64, io, json, os
+from datetime import datetime
 from PIL import Image
+import numpy as np
 
 async def make_request(session, url, model, prompt, max_tokens):
     start_time = time.perf_counter()
@@ -22,7 +24,9 @@ async def run_benchmark(url, model, prompt, max_tokens, num_requests, concurrenc
         return await asyncio.gather(*[bounded_request(session) for _ in range(num_requests)])
 
 URL = "http://192.168.102.11:8000/v1/chat/completions"
+BASE_URL = "http://192.168.102.11:8000"
 MODEL = "QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
+RESULTS_DIR = os.path.expanduser("~/llm/benchmark_results")
 WORDS = ["the","be","to","of","and","a","in","that","have","it","for","not","on",
     "with","as","you","do","at","this","but","by","from","they","we","say","or"]
 
@@ -43,7 +47,8 @@ def run(prompt, max_tokens, num_requests, concurrency):
     elapsed = time.perf_counter() - start
     encode_toks = sum(pt for pt,_,_ in results)
     decode_toks = sum(ct for _,ct,_ in results)
-    return elapsed, encode_toks/elapsed, decode_toks/elapsed
+    lats = sorted([l for _,_,l in results])
+    return elapsed, encode_toks/elapsed, decode_toks/elapsed, lats
 
 def run_prefill(target_tokens, num_requests=5, concurrency=1):
     """Benchmark prefill speed at given prompt length."""
@@ -68,6 +73,21 @@ def run_img(w,h,n,c):
             return time.perf_counter()-st,sum(r)
     return asyncio.run(go())
 
+def get_vllm_config():
+    """Fetch vLLM server config."""
+    import requests
+    try:
+        r = requests.get(f"{BASE_URL}/v1/models", timeout=5)
+        return {"models": r.json(), "url": BASE_URL}
+    except: return {"url": BASE_URL}
+
+def save_results(name, data):
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = f"{RESULTS_DIR}/{ts}_{name}.json"
+    with open(path, "w") as f: json.dump(data, f, indent=2)
+    print(f"Saved: {path}"); return path
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt", default="Continue writing numbers: 1, 2, 3, 4, 5,")
@@ -90,12 +110,16 @@ def main():
             actual, rate = run_prefill(toks)
             print(f"{toks}\t{actual:.0f}\t{rate:.1f}", flush=True)
     elif args.sweep:
-        print("c\treq/s\tenc/s\tdec/s")
+        print("c\treq/s\tenc/s\tdec/s\tp50\tp95\tp99"); rows=[]
         for conc in [1,2,4,8,16,32,64,128,256]:
-            elapsed,enc,dec = run(args.prompt, args.t, conc, conc)
-            print(f"{conc}\t{conc/elapsed:.2f}\t{enc:.1f}\t{dec:.1f}")
+            el,enc,dec,lats = run(args.prompt, args.t, conc, conc)
+            p50,p95,p99 = np.percentile(lats,[50,95,99])
+            print(f"{conc}\t{conc/el:.2f}\t{enc:.1f}\t{dec:.1f}\t{p50:.2f}\t{p95:.2f}\t{p99:.2f}")
+            rows.append({"c":conc,"req_s":conc/el,"enc":enc,"dec":dec,"p50":p50,"p95":p95,"p99":p99})
+        save_results("sweep", {"config": get_vllm_config(), "results": rows})
     else:
-        elapsed,enc,dec = run(args.prompt, args.t, args.n, args.c)
-        print(f"c={args.c} req/s={args.n/elapsed:.2f} enc={enc:.1f} dec={dec:.1f}")
+        el,enc,dec,lats = run(args.prompt, args.t, args.n, args.c)
+        p50,p95,p99 = np.percentile(lats,[50,95,99])
+        print(f"c={args.c} req/s={args.n/el:.2f} enc={enc:.1f} dec={dec:.1f} p50={p50:.2f}s")
 
 if __name__ == "__main__": main()
