@@ -129,7 +129,7 @@ docker run ... \
 - Single: `NCCL_IB_HCA='=rocep1s0f1:1'`
 - Dual: `NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'`
 
-**Current config:** Dual-rail (Jan 2026). Both rails show equal traffic.
+**Current config:** Single-rail (Jan 2026). Faster than dual-rail with GDR disabled.
 **Benchmark:** Single-rail 299 tok/s, dual-rail 239 tok/s at c=256 (~20% slower).
 
 **Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [vLLM distributed troubleshooting](https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/), [Spark 22GB/s](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077)
@@ -265,10 +265,11 @@ vLLM serve (auto-configured 256K context, Jan 2026):
 vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
   --tensor-parallel-size 2 --trust-remote-code --enforce-eager \
   --quantization awq --gpu-memory-utilization 0.75 --kv-cache-dtype fp8 \
-  --limit-mm-per-prompt.video 0 --host 0.0.0.0 --port 8000
+  --limit-mm-per-prompt.video 0 --max-num-batched-tokens 2048 \
+  --distributed-executor-backend ray --host 0.0.0.0 --port 8000
 ```
 
-**Key:** `--quantization awq` avoids marlin repack OOM, `--kv-cache-dtype fp8` halves KV mem
+**Key:** `--enforce-eager` REQUIRED (CUDA graphs crash on this model), `--distributed-executor-backend ray` for multi-node
 
 **VLM encoder profiling:** Takes ~5 min on multi-node TP=2. Not a hang - just slow. Wait for it.
 
@@ -448,6 +449,8 @@ Can be dramatically faster. May OOM in TP scenarios.
 **OOM killers:** Inactive on spark-2/spark-3 (unlike spark-1). Only kernel OOM kicks in.
 
 **SGLang vs vLLM (Jan 2026):** vLLM is more stable for multi-node AWQ. SGLang hangs after NCCL init.
+
+**`--async-scheduling` (Jan 2026):** NOT compatible with multi-node - forces mp executor which expects multiple local GPUs.
 
 **Cost vs OpenRouter:** ~$0.53/hour savings ($382/month). Break-even ~31 months at current load.
 
