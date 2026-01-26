@@ -371,7 +371,7 @@ Higher = better throughput/TTFT, worse ITL. Lower = smoother streaming.
 **TP (default):** `./start-vllm-multinode.sh` - Tensor parallel, splits layers across GPUs
 **PP mode:** `./start-vllm-multinode.sh --pp` - Pipeline parallel, each GPU runs different layers
 
-PP mode tested but showed 0 throughput with high concurrency. TP mode recommended.
+Both modes work. Heavy prefill queues can make throughput appear zero initially - wait for ramp-up.
 
 ## Model Cache (Jan 2026)
 
