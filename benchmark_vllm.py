@@ -99,16 +99,20 @@ def main():
     parser.add_argument("--image", action="store_true", help="Benchmark image throughput")
     args = parser.parse_args()
     if args.image:
-        print("res\tc\treq/s\timg_tok/s", flush=True)
+        print("res\tc\treq/s\timg_tok/s", flush=True); rows=[]
         for w in [256,512,1024,2048]:
             for c in [1,4,8,16,32]:
                 n=max(c,4); el,toks = run_img(w,w,n,c)
                 print(f"{w}x{w}\t{c}\t{n/el:.2f}\t{toks/el:.1f}", flush=True)
+                rows.append({"res":f"{w}x{w}","c":c,"req_s":n/el,"tok_s":toks/el})
+        save_results("image", {"config": get_vllm_config(), "results": rows})
     elif args.prefill:
-        print("target\tactual\tenc_tok/s", flush=True)
+        print("target\tactual\tenc_tok/s", flush=True); rows=[]
         for toks in [128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]:
             actual, rate = run_prefill(toks)
             print(f"{toks}\t{actual:.0f}\t{rate:.1f}", flush=True)
+            rows.append({"target":toks,"actual":actual,"enc_tok_s":rate})
+        save_results("prefill", {"config": get_vllm_config(), "results": rows})
     elif args.sweep:
         print("c\treq/s\tenc/s\tdec/s\tp50\tp95\tp99"); rows=[]
         for conc in [1,2,4,8,16,32,64,128,256]:
