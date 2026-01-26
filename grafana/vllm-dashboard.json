@@ -1,0 +1,585 @@
+{
+  "id": 1,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "vllm:num_requests_running",
+          "legendFormat": "Running",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "vllm:num_requests_waiting",
+          "legendFormat": "Waiting",
+          "refId": "B"
+        }
+      ],
+      "title": "Requests Running / Waiting",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "vllm:kv_cache_usage_perc * 100",
+          "legendFormat": "KV Cache %",
+          "refId": "A"
+        }
+      ],
+      "title": "KV Cache Usage",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(rate(vllm:request_success_total[1m]))",
+          "legendFormat": "req/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Request Throughput",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(vllm:request_success_total)",
+          "legendFormat": "Total",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Requests",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "green",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(vllm:prefix_cache_hits_total) / sum(vllm:prefix_cache_queries_total) * 100",
+          "legendFormat": "Hit Rate %",
+          "refId": "A"
+        }
+      ],
+      "title": "Prefix Cache Hit Rate",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 4
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(rate(vllm:generation_tokens_total[1m]))",
+          "legendFormat": "tok/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Generation Tokens/s",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 4
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(rate(vllm:prompt_tokens_total[1m]))",
+          "legendFormat": "tok/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Prompt Tokens/s",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 4
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(vllm:num_preemptions_total)",
+          "legendFormat": "Total",
+          "refId": "A"
+        }
+      ],
+      "title": "Preemptions",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Generation tok/s"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Generation"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 9,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(rate(vllm:generation_tokens_total[30s]))",
+          "legendFormat": "Generation tok/s",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(rate(vllm:prompt_tokens_total[30s]))",
+          "legendFormat": "Prompt tok/s",
+          "refId": "B"
+        }
+      ],
+      "title": "Token Throughput Over Time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 10,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:e2e_request_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:e2e_request_latency_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "E2E Request Latency (p50/p95/p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 11,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum by (finished_reason) (rate(vllm:request_success_total[1m]))",
+          "legendFormat": "{{finished_reason}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Request Success by Finish Reason",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 12,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(vllm:generation_tokens_total)",
+          "legendFormat": "Generation Tokens",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(vllm:prompt_tokens_total)",
+          "legendFormat": "Prompt Tokens",
+          "refId": "B"
+        }
+      ],
+      "title": "Total Tokens Processed",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 13,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prefill_time_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(vllm:request_prefill_time_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prefill_time_seconds_bucket[1m])) by (le))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Prefill Time (includes image encode)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": [
+    "vllm",
+    "llm",
+    "spark"
+  ],
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1s",
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m"
+    ]
+  },
+  "timezone": "browser",
+  "title": "vLLM - Qwen3-VL-235B (spark-2/spark-3)",
+  "uid": "vllm-spark",
+  "version": 6
+}
