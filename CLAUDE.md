@@ -291,13 +291,13 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Image benchmark:** `benchmark_vllm.py --image`
 
-| Resolution | Peak tok/s | Best c |
-|------------|------------|--------|
-| 256×256 | 247 | 32 |
-| 512×512 | 692 | 32 |
-| 1024×1024 | 1286 | 32 |
+| Resolution | Peak tok/s | Best c | Mode |
+|------------|------------|--------|------|
+| 256×256 | 398 | 32 | TP+data |
+| 512×512 | 945 | 32 | TP+data |
+| 1024×1024 | 1543 | 32 | TP+data |
 
-**Key:** Larger images benefit most from batching. Very noisy under concurrent load
+**TP+data = `--mm-encoder-tp-mode data`** (20-60% faster than PP mode for VLM)
 
 **Metrics note:** `prompt_tokens_total` includes cache hits. Real prefill compute = queries - hits.
 **Chunked prefill:** Enabled by default in vLLM V1. Tune via `--max-num-batched-tokens`.
