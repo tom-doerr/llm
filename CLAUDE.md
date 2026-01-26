@@ -422,9 +422,11 @@ Can be dramatically faster. May OOM in TP scenarios.
 **Dashboard:** `grafana/vllm-dashboard.json` (UID: `vllm-spark`)
 **URL:** http://localhost:3000/d/vllm-spark
 
-**Panels:** Requests, KV Cache gauge, throughput stats, Token Throughput (dual Y-axis), E2E Latency p50/p95/p99, Total Tokens (dual Y-axis), Prefill Time
+**Panels (20):** Requests, KV Cache, Throughput stats, Token Throughput, E2E/Prefill Latency, Decode vs Prefill, Prompt/Completion Length (p1/p50/p95/p99), GPU Util/Power/Temp, CPU/RAM %, Network RDMA
 
-**Datasource:** Prometheus (`cfagbva82okjkf`) scraping vLLM at spark-2:8000
+**Exporters:** vLLM :8000, node_exporter :9100 (spark-1/2), dcgm-exporter :9400 (spark-2)
+
+**Config files:** `prometheus.yml`, `systemd/node-exporter.service`
 
 **Export:** `curl -s -u admin:admin123 http://localhost:3000/api/dashboards/uid/vllm-spark | jq '.dashboard' > grafana/vllm-dashboard.json`
 
