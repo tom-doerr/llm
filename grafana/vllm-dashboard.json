@@ -580,6 +580,208 @@
       ],
       "title": "Prefill Time (includes image encode)",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 14,
+      "targets": [
+        {
+          "expr": "rate(vllm:request_decode_time_seconds_sum[1m]) / rate(vllm:request_decode_time_seconds_count[1m])",
+          "legendFormat": "Avg Decode",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(vllm:request_prefill_time_seconds_sum[1m]) / rate(vllm:request_prefill_time_seconds_count[1m])",
+          "legendFormat": "Avg Prefill",
+          "refId": "B"
+        }
+      ],
+      "title": "Decode vs Prefill Time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Power W"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "watt"
+              },
+              {
+                "id": "max",
+                "value": 200
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "id": 15,
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_GPU_UTIL",
+          "legendFormat": "GPU %",
+          "refId": "A"
+        },
+        {
+          "expr": "DCGM_FI_DEV_POWER_USAGE",
+          "legendFormat": "Power W",
+          "refId": "B"
+        }
+      ],
+      "title": "GPU Utilization & Power (spark-2)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "id": 16,
+      "targets": [
+        {
+          "expr": "100 - (avg by(instance) (irate(node_cpu_seconds_total{mode=\"idle\",instance=~\"spark-2.*\"}[1m])) * 100)",
+          "legendFormat": "CPU %",
+          "refId": "A"
+        },
+        {
+          "expr": "(1 - node_memory_MemAvailable_bytes{instance=~\"spark-2.*\"} / node_memory_MemTotal_bytes{instance=~\"spark-2.*\"}) * 100",
+          "legendFormat": "RAM %",
+          "refId": "B"
+        }
+      ],
+      "title": "CPU & Memory (spark-2)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "id": 17,
+      "targets": [
+        {
+          "expr": "rate(node_network_receive_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s])",
+          "legendFormat": "RX {{device}}",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(node_network_transmit_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s])",
+          "legendFormat": "TX {{device}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Network Throughput (spark-2)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          },
+          "unit": "celsius"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 40
+      },
+      "id": 18,
+      "targets": [
+        {
+          "expr": "DCGM_FI_DEV_GPU_TEMP",
+          "legendFormat": "GPU Temp",
+          "refId": "A"
+        }
+      ],
+      "title": "GPU Temperature (spark-2)",
+      "type": "gauge"
     }
   ],
   "refresh": "5s",
@@ -606,5 +808,5 @@
   "timezone": "browser",
   "title": "vLLM - Qwen3-VL-235B (spark-2/spark-3)",
   "uid": "vllm-spark",
-  "version": 7
+  "version": 12
 }
