@@ -805,22 +805,27 @@
         {
           "expr": "histogram_quantile(0.01, sum(rate(vllm:request_prompt_tokens_bucket[1m])) by (le))",
           "legendFormat": "p1",
-          "refId": "D"
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.05, sum(rate(vllm:request_prompt_tokens_bucket[1m])) by (le))",
+          "legendFormat": "p5",
+          "refId": "B"
         },
         {
           "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prompt_tokens_bucket[1m])) by (le))",
           "legendFormat": "p50",
-          "refId": "A"
+          "refId": "C"
         },
         {
           "expr": "histogram_quantile(0.95, sum(rate(vllm:request_prompt_tokens_bucket[1m])) by (le))",
           "legendFormat": "p95",
-          "refId": "B"
+          "refId": "D"
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(vllm:request_prompt_tokens_bucket[1m])) by (le))",
           "legendFormat": "p99",
-          "refId": "C"
+          "refId": "E"
         }
       ],
       "title": "Prompt Length (tokens/request)",
@@ -848,22 +853,27 @@
         {
           "expr": "histogram_quantile(0.01, sum(rate(vllm:request_generation_tokens_bucket[1m])) by (le))",
           "legendFormat": "p1",
-          "refId": "D"
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.05, sum(rate(vllm:request_generation_tokens_bucket[1m])) by (le))",
+          "legendFormat": "p5",
+          "refId": "B"
         },
         {
           "expr": "histogram_quantile(0.50, sum(rate(vllm:request_generation_tokens_bucket[1m])) by (le))",
           "legendFormat": "p50",
-          "refId": "A"
+          "refId": "C"
         },
         {
           "expr": "histogram_quantile(0.95, sum(rate(vllm:request_generation_tokens_bucket[1m])) by (le))",
           "legendFormat": "p95",
-          "refId": "B"
+          "refId": "D"
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(vllm:request_generation_tokens_bucket[1m])) by (le))",
           "legendFormat": "p99",
-          "refId": "C"
+          "refId": "E"
         }
       ],
       "title": "Completion Length (tokens/request)",
@@ -894,5 +904,5 @@
   "timezone": "browser",
   "title": "vLLM - Qwen3-VL-235B (spark-2/spark-3)",
   "uid": "vllm-spark",
-  "version": 14
+  "version": 15
 }
