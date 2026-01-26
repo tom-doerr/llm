@@ -417,6 +417,19 @@ Can be dramatically faster. May OOM in TP scenarios.
 
 **Why slow:** mmap causes page faults, Spark has 50x slowdown for small H2D copies.
 
+## Grafana Dashboard
+
+**Dashboard:** `grafana/vllm-dashboard.json` (UID: `vllm-spark`)
+**URL:** http://localhost:3000/d/vllm-spark
+
+**Panels:** Requests, KV Cache gauge, throughput stats, Token Throughput (dual Y-axis), E2E Latency p50/p95/p99, Total Tokens (dual Y-axis), Prefill Time
+
+**Datasource:** Prometheus (`cfagbva82okjkf`) scraping vLLM at spark-2:8000
+
+**Export:** `curl -s -u admin:admin123 http://localhost:3000/api/dashboards/uid/vllm-spark | jq '.dashboard' > grafana/vllm-dashboard.json`
+
+**Import:** See `grafana/README.md`
+
 ## Notes
 
 **OOM killers:** Inactive on spark-2/spark-3 (unlike spark-1). Only kernel OOM kicks in.
