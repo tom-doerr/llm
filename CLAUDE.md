@@ -291,12 +291,11 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Image benchmark:** `benchmark_vllm.py --image`
 
-| Resolution | Tokens/img | Peak tok/s | Best c |
-|------------|------------|------------|--------|
-| 256×256 | ~75 | 167 | 16 |
-| 512×512 | ~267 | 83 | 32 |
-| 1024×1024 | ~1024 | 167 | 16 |
-| 2048×2048 | ~4096 | 708 | 32 |
+| Resolution | Peak tok/s | Best c |
+|------------|------------|--------|
+| 256×256 | 247 | 32 |
+| 512×512 | 692 | 32 |
+| 1024×1024 | 1286 | 32 |
 
 **Key:** Larger images benefit most from batching. Very noisy under concurrent load
 
