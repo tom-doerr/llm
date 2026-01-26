@@ -474,7 +474,32 @@
         "defaults": {
           "min": 0,
           "unit": "short"
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Generation Tokens"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Generation"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -581,5 +606,5 @@
   "timezone": "browser",
   "title": "vLLM - Qwen3-VL-235B (spark-2/spark-3)",
   "uid": "vllm-spark",
-  "version": 6
+  "version": 7
 }
