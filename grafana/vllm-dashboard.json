@@ -803,6 +803,11 @@
       "id": 19,
       "targets": [
         {
+          "expr": "histogram_quantile(0.01, sum(rate(vllm:request_prompt_tokens_bucket[1m])) by (le))",
+          "legendFormat": "p1",
+          "refId": "D"
+        },
+        {
           "expr": "histogram_quantile(0.50, sum(rate(vllm:request_prompt_tokens_bucket[1m])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
@@ -840,6 +845,11 @@
       },
       "id": 20,
       "targets": [
+        {
+          "expr": "histogram_quantile(0.01, sum(rate(vllm:request_generation_tokens_bucket[1m])) by (le))",
+          "legendFormat": "p1",
+          "refId": "D"
+        },
         {
           "expr": "histogram_quantile(0.50, sum(rate(vllm:request_generation_tokens_bucket[1m])) by (le))",
           "legendFormat": "p50",
@@ -884,5 +894,5 @@
   "timezone": "browser",
   "title": "vLLM - Qwen3-VL-235B (spark-2/spark-3)",
   "uid": "vllm-spark",
-  "version": 13
+  "version": 14
 }
