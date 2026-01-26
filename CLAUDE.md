@@ -452,3 +452,19 @@ Can be dramatically faster. May OOM in TP scenarios.
 **Config:** `helicone/docker/.env`
 
 **Workaround:** Use header-based logging instead of proxy since ai-gateway not available on ARM64.
+
+## Arize Phoenix (Jan 2026)
+
+**Service:** `~/.config/systemd/user/phoenix.service`
+**Port:** 6006
+**Data:** `~/.local/share/phoenix/`
+
+`systemctl --user {status|restart|stop} phoenix`
+
+## Langfuse (Jan 2026)
+
+**Dir:** `~/llm/langfuse/`
+**Port:** 3100
+**Services:** langfuse-web, langfuse-worker, postgres, clickhouse, redis
+
+`docker compose -f ~/llm/langfuse/docker-compose.yml {ps|up -d|down}`
