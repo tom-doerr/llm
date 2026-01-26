@@ -24,7 +24,7 @@ ENV="$ENV -e GLOO_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
 ENV="$ENV -e VLLM_SLEEP_WHEN_IDLE=1"  # Reduce CPU when idle (small latency cost)
-ENV="$ENV -e OMP_NUM_THREADS=1"  # Reduce threading overhead (vLLM Qwen3-VL recommended)
+ENV="$ENV -e OMP_NUM_THREADS=1"  # Reduce threading overhead
 # Note: VLLM_USE_RAY_COMPILED_DAG=0 doesn't work for multi-node - vLLM forces it to 1
 
 if [ "$DEBUG_NCCL" = "1" ]; then
@@ -75,8 +75,7 @@ else
 fi
 VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.75"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8 --limit-mm-per-prompt.video 0"
-VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"
-VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 8192"
+# --mm-encoder-tp-mode data disabled - hangs encoder profiling in multi-node
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
 ssh spark-2 "docker exec -d -e RAY_ADDRESS=$HEAD_IP:6379 -e VLLM_ATTENTION_BACKEND=TRITON_ATTN vllm-head \\

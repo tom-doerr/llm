@@ -265,6 +265,8 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Key:** `--quantization awq` avoids marlin repack OOM, `--kv-cache-dtype fp8` halves KV mem
 
+**VLM encoder profiling:** Takes ~5 min on multi-node TP=2. Not a hang - just slow. Wait for it.
+
 **Auto-config (Jan 2026):** vLLM auto-detects available memory and configures 256K context with ~547K token KV cache (34K blocks × 16). No `--max-model-len` needed.
 
 **Memory:** 97GB/119GB used. Enough for ~2 concurrent 256K requests or many shorter ones.
@@ -440,3 +442,13 @@ Can be dramatically faster. May OOM in TP scenarios.
 **SGLang vs vLLM (Jan 2026):** vLLM is more stable for multi-node AWQ. SGLang hangs after NCCL init.
 
 **Cost vs OpenRouter:** ~$0.53/hour savings ($382/month). Break-even ~31 months at current load.
+
+## Helicone (Jan 2026)
+
+**Status:** Dashboard works, ai-gateway missing (no ARM64 build).
+
+**Container:** `helicone/helicone-all-in-one:latest`
+**Ports:** Web :3001, Jawn API :8585, Kong :8100
+**Config:** `helicone/docker/.env`
+
+**Workaround:** Use header-based logging instead of proxy since ai-gateway not available on ARM64.
