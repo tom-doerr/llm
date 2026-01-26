@@ -129,7 +129,8 @@ docker run ... \
 - Single: `NCCL_IB_HCA='=rocep1s0f1:1'`
 - Dual: `NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'`
 
-**Current config:** Dual-rail (script updated Jan 2026). Both rails show equal traffic.
+**Current config:** Dual-rail (Jan 2026). Both rails show equal traffic.
+**Benchmark:** Single-rail 299 tok/s, dual-rail 239 tok/s at c=256 (~20% slower).
 
 **Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [vLLM distributed troubleshooting](https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/), [Spark 22GB/s](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077)
 
