@@ -277,7 +277,9 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 | 64 | 273 | **+64%** |
 | 256 | **299** | **+79%** |
 
-**Peak: ~300 tok/s decode** (79% faster than Socket). Script: `benchmark_vllm.py --sweep -t 256`
+**Peak: ~300 tok/s decode** (79% faster than Socket). Script: `benchmark_vllm.py --sweep`
+
+**Results saved to:** `benchmark_results/<timestamp>_sweep.json` with vLLM config and latency p50/p95/p99
 
 **Prefill benchmark:** `benchmark_vllm.py --prefill`
 | Tokens | Enc tok/s | Time |
@@ -363,8 +365,8 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 
 ### Scheduler Tuning
 
-**`max_num_batched_tokens`:** Default 8192 (≥70GB GPU). We use 32768 (4x) for throughput.
-Higher = better throughput/TTFT, worse ITL. Lower = smoother streaming.
+**`max_num_batched_tokens`:** Default 8192 (≥70GB GPU). Lower = smoother streaming, higher = better throughput.
+Peak decode ~151 tok/s at c=64 with 32768, reverted to 8192 for lower latency.
 
 ### TP vs PP Mode
 
