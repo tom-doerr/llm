@@ -75,7 +75,7 @@ else
 fi
 VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.75"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8 --limit-mm-per-prompt.video 0"
-# --mm-encoder-tp-mode data disabled - hangs encoder profiling in multi-node
+VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 8192"
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
