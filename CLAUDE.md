@@ -17,6 +17,8 @@ Each 200G QSFP port = **two logical interfaces** (need IPs on BOTH for full 200 
 - Port 0: `enp1s0f0np0` + `enP2p1s0f0np0`
 - Port 1: `enp1s0f1np1` + `enP2p1s0f1np1`
 
+**Interface naming:** Capital P in `enP2p1s0f1np1` = different PCI domain. Not a typo.
+
 Use `ibdev2netdev` to check status, `ethtool <iface>` to verify 200000Mb/s link.
 
 ## Cabling
@@ -123,9 +125,11 @@ docker run ... \
 
 **Latency matters:** RDMA's ~1-2μs latency (vs Socket ~1-2ms) helps tensor parallelism all-reduce ops.
 
-**Single-rail is faster:** Dual-rail with GDR disabled adds CPU staging overhead → 31% slower.
-Use `NCCL_IB_HCA='=rocep1s0f1:1'` for best performance (~300 tok/s vs ~205 dual-rail).
-Tested Jan 2026: dual-rail 205 tok/s, single-rail 299 tok/s at c=256.
+**Single vs Dual-rail:** Dual-rail adds CPU staging overhead with GDR disabled.
+- Single: `NCCL_IB_HCA='=rocep1s0f1:1'`
+- Dual: `NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'`
+
+**Current config:** Dual-rail (script updated Jan 2026). Both rails show equal traffic.
 
 **Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [vLLM distributed troubleshooting](https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/), [Spark 22GB/s](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077)
 
@@ -226,7 +230,7 @@ Container: `nvcr.io/nvidia/vllm:25.11-py3`
 
 **VERIFIED WORKING (Jan 2026):** ~3 min model load, ~5s TTFT
 
-**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM across spark-2/spark-3)
+**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM across spark-2/spark-3, dual-rail RDMA)
 
 Docs: https://build.nvidia.com/spark/vllm/stacked-sparks
 
@@ -360,7 +364,10 @@ This is normal - pure matmul workloads boost higher.
 
 Check RDMA counters are incrementing during inference:
 ```bash
+# Single rail
 cat /sys/class/infiniband/rocep1s0f1/ports/1/counters/port_xmit_data
+# Both rails (for dual-rail config)
+cat /sys/class/infiniband/roceP2p1s0f1/ports/1/counters/port_xmit_data
 ```
 If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.sh --debug`
 
