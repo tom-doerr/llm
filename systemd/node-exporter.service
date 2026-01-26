@@ -1,0 +1,11 @@
+[Unit]
+Description=Node Exporter
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/node_exporter --web.listen-address=:9100
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
