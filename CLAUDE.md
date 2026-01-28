@@ -277,35 +277,34 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Memory:** 97GB/119GB used. Enough for ~2 concurrent 256K requests or many shorter ones.
 
-**Benchmark (Jan 2026 - RDMA with GDR disabled):**
+**Benchmark (Jan 2026 - CUDA graphs, 0.70 mem util, single-rail RDMA):**
 
-| Concurrency | Decode tok/s | vs Socket |
-|-------------|--------------|-----------|
-| 1 | 18 | baseline |
-| 64 | 273 | **+64%** |
-| 256 | **299** | **+79%** |
+| Concurrency | dec tok/s | p50 |
+|-------------|-----------|-----|
+| 1 | 3.3 | 9.8s |
+| 64 | 117 | 14.4s |
+| 256 | **157** | 28.3s |
 
-**Peak: ~300 tok/s decode** (79% faster than Socket). Script: `benchmark_vllm.py --sweep`
+**Single request:** ~7 tok/s streaming, **TTFT ~9s**. Script: `benchmark_vllm.py --sweep`
 
 **Results saved to:** `benchmark_results/<timestamp>_sweep.json` with vLLM config and latency p50/p95/p99
 
 **Prefill benchmark:** `benchmark_vllm.py --prefill`
-| Tokens | Enc tok/s | Time |
-|--------|-----------|------|
-| 1K | 1,266 | 1s |
-| 8K | 996 | 11s |
-| 64K | 312 | 4.5min |
-| 131K | 174 | 16min |
+| Tokens | Enc tok/s |
+|--------|-----------|
+| 1K | 1,064 |
+| 8K | 909 |
+| 32K | 459 |
+| 64K | 288 |
 
 **Image benchmark:** `benchmark_vllm.py --image`
 
-| Resolution | Peak tok/s | Best c | Mode |
-|------------|------------|--------|------|
-| 256×256 | 398 | 32 | TP+data |
-| 512×512 | 945 | 32 | TP+data |
-| 1024×1024 | 1543 | 32 | TP+data |
+| Resolution | c=32 tok/s |
+|------------|------------|
+| 256×256 | 240 |
+| 512×512 | 608 |
 
-**TP+data = `--mm-encoder-tp-mode data`** (20-60% faster than PP mode for VLM)
+**Note:** Add `--mm-encoder-tp-mode data` for ~2x image throughput.
 
 **Metrics note:** `prompt_tokens_total` includes cache hits. Real prefill compute = queries - hits.
 **Chunked prefill:** Enabled by default in vLLM V1. Tune via `--max-num-batched-tokens`.
