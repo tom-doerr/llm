@@ -68,12 +68,12 @@ sleep 5
 echo "=== Starting vLLM server ==="
 if [ "$USE_PP" = "1" ]; then
   echo "Mode: Pipeline Parallel (PP=2)"
-  VLLM_ARGS="--pipeline-parallel-size 2 --trust-remote-code --enforce-eager"
+  VLLM_ARGS="--pipeline-parallel-size 2 --trust-remote-code"
 else
   echo "Mode: Tensor Parallel (TP=2)"
-  VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code --enforce-eager"
+  VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code"
 fi
-VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.75"
+VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.70"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8 --limit-mm-per-prompt.video 0"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 2048"
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"  # Required for multi-node

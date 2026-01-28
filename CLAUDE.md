@@ -263,13 +263,13 @@ export RAY_memory_monitor_refresh_ms=0
 vLLM serve (auto-configured 256K context, Jan 2026):
 ```bash
 vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
-  --tensor-parallel-size 2 --trust-remote-code --enforce-eager \
-  --quantization awq --gpu-memory-utilization 0.75 --kv-cache-dtype fp8 \
+  --tensor-parallel-size 2 --trust-remote-code \
+  --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
   --limit-mm-per-prompt.video 0 --max-num-batched-tokens 2048 \
   --distributed-executor-backend ray --host 0.0.0.0 --port 8000
 ```
 
-**Key:** `--enforce-eager` REQUIRED (CUDA graphs crash on this model), `--distributed-executor-backend ray` for multi-node
+**Key:** `--gpu-memory-utilization 0.70` enables CUDA graphs (0.75 crashes during capture). Graphs reduce CPU ~2.5x.
 
 **VLM encoder profiling:** Takes ~5 min on multi-node TP=2. Not a hang - just slow. Wait for it.
 
@@ -349,6 +349,10 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 - `OMP_NUM_THREADS=1` - Enabled, reduces threading overhead
 - `RAY_DEDUP_LOGS=1` - Optional, reduces log overhead
 - `--mm-processor-cache-gb 1` - Optional, reduces image cache
+
+### Shared CPU/GPU Power Budget
+
+DGX Spark has a **shared power limit** for CPU and GPU. High CPU load steals power from GPU, reducing inference throughput. Minimize CPU overhead during inference.
 
 ### GPU Idle Power (NCCL Polling)
 
