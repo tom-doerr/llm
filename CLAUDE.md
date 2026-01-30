@@ -306,6 +306,8 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Note:** `--mm-encoder-tp-mode data` would give ~2x image throughput but currently hangs on multi-node.
 
+**Encoder cache:** vLLM automatically caches image encoder outputs by content hash (blake3). No explicit ID needed - same image bytes = cache hit. Cache is in-memory on worker node.
+
 **Metrics note:** `prompt_tokens_total` includes cache hits. Real prefill compute = queries - hits.
 **Chunked prefill:** Enabled by default in vLLM V1. Tune via `--max-num-batched-tokens`.
 
