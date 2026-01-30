@@ -307,6 +307,11 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Note:** `--mm-encoder-tp-mode data` enabled for ~2x image throughput. Encoder profiling takes ~1 hour on first startup.
 
+**Video support:** Tested up to 250MB / 15 min videos. Processing time ~4 min regardless of length (frame sampling). Send as base64 data URL:
+```python
+{"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{b64}"}}
+```
+
 **Encoder cache:** vLLM automatically caches image encoder outputs by content hash (blake3). No explicit ID needed - same image bytes = cache hit. Cache is in-memory on worker node.
 
 **Metrics note:** `prompt_tokens_total` includes cache hits. Real prefill compute = queries - hits.
