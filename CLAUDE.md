@@ -266,6 +266,7 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
   --tensor-parallel-size 2 --trust-remote-code \
   --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
   --limit-mm-per-prompt.video 0 --max-num-batched-tokens 2048 \
+  --scheduling-policy priority \
   --distributed-executor-backend ray --host 0.0.0.0 --port 8000
 ```
 
@@ -310,6 +311,8 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Metrics note:** `prompt_tokens_total` includes cache hits. Real prefill compute = queries - hits.
 **Chunked prefill:** Enabled by default in vLLM V1. Tune via `--max-num-batched-tokens`.
+
+**Priority scheduling:** Use `extra_body={"priority": N}` in API calls. Lower N = higher priority (0 = highest).
 
 **Port:** 8000 (default). Use same port for vLLM/SGLang for consistent client code.
 

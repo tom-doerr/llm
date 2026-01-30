@@ -76,8 +76,8 @@ fi
 VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.70"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8 --limit-mm-per-prompt.video 0"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 2048"
+VLLM_ARGS="$VLLM_ARGS --scheduling-policy priority"  # Lower priority value = higher priority
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"  # Required for multi-node
-# Note: --async-scheduling not compatible with Ray backend, use default scheduling
 # --mm-encoder-tp-mode data disabled - hangs encoder profiling in multi-node
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
