@@ -265,7 +265,7 @@ vLLM serve (auto-configured 256K context, Jan 2026):
 vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
   --tensor-parallel-size 2 --trust-remote-code \
   --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
-  --limit-mm-per-prompt.video 0 --max-num-batched-tokens 2048 \
+  --max-num-batched-tokens 2048 \
   --scheduling-policy priority \
   --distributed-executor-backend ray --host 0.0.0.0 --port 8000
 ```
