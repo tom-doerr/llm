@@ -266,13 +266,13 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
   --tensor-parallel-size 2 --trust-remote-code \
   --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
   --max-num-batched-tokens 2048 \
-  --scheduling-policy priority \
+  --scheduling-policy priority --mm-encoder-tp-mode data \
   --distributed-executor-backend ray --host 0.0.0.0 --port 8000
 ```
 
 **Key:** `--gpu-memory-utilization 0.70` enables CUDA graphs (0.75 crashes during capture). Graphs reduce CPU ~2.5x.
 
-**VLM encoder profiling:** Takes ~5 min on multi-node TP=2. Not a hang - just slow. Wait for it.
+**VLM encoder profiling:** Takes ~1 hour on multi-node TP=2 with `--mm-encoder-tp-mode data`. Not a hang - just slow. Wait for it.
 
 **Auto-config (Jan 2026):** vLLM auto-detects available memory and configures 256K context with ~547K token KV cache (34K blocks × 16). No `--max-model-len` needed.
 
@@ -305,7 +305,7 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 | 256×256 | 240 |
 | 512×512 | 608 |
 
-**Note:** `--mm-encoder-tp-mode data` would give ~2x image throughput but currently hangs on multi-node.
+**Note:** `--mm-encoder-tp-mode data` enabled for ~2x image throughput. Encoder profiling takes ~1 hour on first startup.
 
 **Encoder cache:** vLLM automatically caches image encoder outputs by content hash (blake3). No explicit ID needed - same image bytes = cache hit. Cache is in-memory on worker node.
 
@@ -336,7 +336,7 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **Why head is heavier:** EngineCore (scheduling, KV mgmt), tokenization (CPU-only), vision preprocessing (image decode/resize before GPU), Ray GCS server.
 
-**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder. Currently **DISABLED** - hangs encoder profiling in multi-node TP=2. All vision encoding runs on head node only.
+**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder. **ENABLED** - encoder profiling takes ~1 hour on first startup but succeeds. ~2x image throughput.
 
 **Reduce CPU load:** Resize images client-side before API calls (<100KB).
 

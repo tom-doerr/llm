@@ -78,7 +78,7 @@ VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 2048"
 VLLM_ARGS="$VLLM_ARGS --scheduling-policy priority"  # Lower priority value = higher priority
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"  # Required for multi-node
-# --mm-encoder-tp-mode data disabled - hangs encoder profiling in multi-node
+VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"  # GPU data parallel for vision encoder
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
 ssh spark-2 "docker exec -d -e RAY_ADDRESS=$HEAD_IP:6379 -e VLLM_ATTENTION_BACKEND=TRITON_ATTN vllm-head \\
