@@ -304,7 +304,7 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 | 256×256 | 240 |
 | 512×512 | 608 |
 
-**Note:** Add `--mm-encoder-tp-mode data` for ~2x image throughput.
+**Note:** `--mm-encoder-tp-mode data` would give ~2x image throughput but currently hangs on multi-node.
 
 **Metrics note:** `prompt_tokens_total` includes cache hits. Real prefill compute = queries - hits.
 **Chunked prefill:** Enabled by default in vLLM V1. Tune via `--max-num-batched-tokens`.
@@ -323,14 +323,15 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **spark-2 (head)** uses more CPU/RAM than **spark-3 (worker)**:
 
-| Resource | spark-2 (head) | spark-3 (worker) |
-|----------|----------------|------------------|
-| CPU | ~1200% (EngineCore) + 134% (Ray) | ~246% (Ray worker) |
-| RAM | 118GB used, <1GB free | 109GB used, 10GB free |
+| State | spark-2 (head) | spark-3 (worker) |
+|-------|----------------|------------------|
+| Idle | ~280% CPU (load avg ~3) | ~100% CPU |
+| Under load | ~1000% CPU (load avg ~13) | ~350% CPU |
+| RAM | 112GB used, <2GB free | 106GB used, ~6GB free |
 
 **Why head is heavier:** EngineCore (scheduling, KV mgmt), tokenization (CPU-only), vision preprocessing (image decode/resize before GPU), Ray GCS server.
 
-**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder. Now enabled - previously caused hangs but works in vLLM 25.11.
+**`--mm-encoder-tp-mode data`:** GPU data parallel for vision encoder. Currently **DISABLED** - hangs encoder profiling in multi-node TP=2. All vision encoding runs on head node only.
 
 **Reduce CPU load:** Resize images client-side before API calls (<100KB).
 
