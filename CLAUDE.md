@@ -129,8 +129,8 @@ docker run ... \
 - Single: `NCCL_IB_HCA='=rocep1s0f1:1'`
 - Dual: `NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'`
 
-**Current config:** Single-rail (Jan 2026). Faster than dual-rail with GDR disabled.
-**Benchmark:** Single-rail 299 tok/s, dual-rail 239 tok/s at c=256 (~20% slower).
+**Current config:** Dual-rail (Jan 2026). `NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'`
+**Benchmark (old single-rail):** Single-rail 299 tok/s, dual-rail 239 tok/s at c=256.
 
 **Sources:** [NCCL env vars](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html), [vLLM distributed troubleshooting](https://docs.vllm.ai/en/stable/serving/distributed_troubleshooting/), [Spark 22GB/s](https://forums.developer.nvidia.com/t/dgx-spark-nccl-test-10gb-s-not-200-gbps-25-gb-s/350077)
 
@@ -267,18 +267,23 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
   --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
   --max-num-batched-tokens 2048 \
   --scheduling-policy priority --mm-encoder-tp-mode data \
+  --limit-mm-per-prompt '{"video": 0}' \
   --distributed-executor-backend ray --host 0.0.0.0 --port 8000
 ```
 
-**Key:** `--gpu-memory-utilization 0.70` enables CUDA graphs (0.75 crashes during capture). Graphs reduce CPU ~2.5x.
+**Key:** `--gpu-memory-utilization 0.70` enables CUDA graphs (0.65 crashes - only 8GB KV, 0.75 crashes during capture).
 
-**VLM encoder profiling:** Takes ~1 hour on multi-node TP=2 with `--mm-encoder-tp-mode data`. Not a hang - just slow. Wait for it.
+**Video disabled:** `--limit-mm-per-prompt '{"video": 0}'` saves ~4GB KV (17GB vs 13GB per node). Encoder cache 16K tokens vs 153K with video.
+
+**VLM encoder profiling:** ~5 min with video disabled, ~1 hour with video enabled.
+
+**VLLM_USE_RAY_COMPILED_DAG=0:** Doesn't work - vLLM V1 forces it to 1 for multi-node.
 
 **Auto-config (Jan 2026):** vLLM auto-detects available memory and configures 256K context with ~547K token KV cache (34K blocks × 16). No `--max-model-len` needed.
 
 **Memory:** 97GB/119GB used. Enough for ~2 concurrent 256K requests or many shorter ones.
 
-**Benchmark (Jan 2026 - CUDA graphs, 0.70 mem util, single-rail RDMA):**
+**Benchmark (Jan 2026 - CUDA graphs, 0.70 mem util, dual-rail RDMA, video disabled):**
 
 | Concurrency | dec tok/s | p50 |
 |-------------|-----------|-----|
