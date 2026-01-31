@@ -3221,3 +3221,160 @@ If you paste your current start script here (or just the `docker run` / `vllm se
 [3]: https://docs.vllm.ai/en/stable/cli/serve/ "vllm serve - vLLM"
 
 
+**TLDR**
+
+You’re seeing ~**1k tok/s “encode”** because you’re running a **monster MoE VLM** (Qwen3‑VL‑235B‑A22B) on **hardware that’s fundamentally bandwidth + interconnect constrained** (DGX Spark’s **273 GB/s unified LPDDR5x**) and, if you’re doing **cross‑node TP**, you’re paying **communication + host‑staging** costs (Spark has **no GPUDirect RDMA**). On top of that, if you’re using `--enforce-eager`, you’re **turning off CUDA Graphs**, which is literally leaving performance on the table. Net: **1k tok/s prefill is not crazy**; it’s often the expected order of magnitude for this class of model even on much bigger GPUs, and Spark makes it worse.
+
+---
+
+## 1) First: “encode” is ambiguous (and people measure it wrong)
+
+With vLLM there are *two* very different “encoding” paths:
+
+### A) **Prefill / prompt encoding** (text + any “prompt tokens”)
+
+The clean way to measure that on a running server is the Prometheus counter:
+
+* `vllm:prompt_tokens_total` (prefill tokens processed) ([docs.vllm.ai][1])
+
+Take a delta over time → prompt tok/s.
+
+### B) **Vision encoding** (image → embeddings → “image tokens”)
+
+This can dominate wall time when you attach images, especially at high resolution and high concurrency. vLLM’s Qwen3‑VL recipe explicitly calls out knobs like `--mm-encoder-tp-mode data` and multimodal caching because the vision side can be a real bottleneck. ([docs.vllm.ai][2])
+
+So if your “encode tps” number is coming from an end‑to‑end benchmark that includes image preprocessing + vision encoder, **1k** can be completely normal.
+
+---
+
+## 2) Reality check: ~1k tok/s is the right *order of magnitude* for 235B-class models
+
+Qwen’s own published speed benchmark (on **H20 96GB**) reports *end-to-end* speed defined as:
+
+[
+\text{Speed} = \frac{\text{prompt tokens} + \text{generation tokens}}{\text{time}}
+]
+
+with batch size 1. ([qwen.readthedocs.io][3])
+
+For **Qwen3‑235B‑A22B** they report numbers in the **hundreds to ~1.6k tokens/s** range depending on context length + quantization + GPU count. ([qwen.readthedocs.io][3])
+
+That’s on big datacenter GPUs with HBM. So expecting “5k–20k tok/s encode” for a 235B model is just not grounded.
+
+---
+
+## 3) The hard limit on DGX Spark: memory bandwidth (and it’s *not* HBM)
+
+DGX Spark is **unified LPDDR5x**, not HBM, and NVIDIA lists:
+
+* **128 GB LPDDR5x coherent unified memory**
+* **273 GB/s bandwidth** ([NVIDIA][4])
+
+That bandwidth is shared and is *the* obvious limiter for large-model inference (weights + activations + KV traffic). LMSYS’ in-depth writeup also flags **memory bandwidth as the key inference bottleneck** on Spark. ([LMSYS][5])
+
+So even if your GPU “utilization” looks high, your **effective tokens/sec** can be capped by **memory traffic**, especially on large models and long contexts.
+
+---
+
+## 4) Cross-node TP on Spark is extra painful because **GPUDirect RDMA is not supported**
+
+This is the big one for **dual-node** Spark setups:
+
+NVIDIA explicitly states **GPUDirect RDMA is not supported on DGX Spark**, and mechanisms like `nvidia-peermem`, `dma-buf`, GDRCopy don’t work. ([NVIDIA Support][6])
+
+What that means in practice:
+
+* NCCL/RDMA can’t “NIC ↔ GPU memory” DMA directly
+* collectives get **host-staged** (bounce buffers) → **CPU + DRAM bandwidth** gets dragged into your critical path
+* **prefill is especially sensitive** because activation tensors are larger than steady-state decode
+
+So your “encode” (prefill) throughput plateaus early. This also matches the symptom you saw elsewhere: **high system CPU time even when mostly idle**, because the communication path + polling is expensive.
+
+---
+
+## 5) You’re probably kneecapping vLLM with `--enforce-eager`
+
+`--enforce-eager=True` **disables CUDA Graph** and forces eager PyTorch execution. vLLM’s own docs say the non-eager path uses “CUDA graph and eager execution in hybrid for maximal performance.” ([docs.vllm.ai][7])
+
+If you can run without `--enforce-eager`, you should—especially on Spark where CPU/launch overhead matters more.
+
+This is one of the most common reasons people get “stuck” at mediocre throughput.
+
+---
+
+## 6) Other config reasons you get stuck around ~1k
+
+These don’t change physics, but they can easily leave 20–50% on the floor:
+
+### A) **Not using `--async-scheduling`**
+
+vLLM’s Qwen3‑VL guide: `--async-scheduling` improves overall system performance by overlapping scheduling overhead with decoding. ([docs.vllm.ai][2])
+On CPU-constrained systems, this matters.
+
+### B) **MoE routing without Expert Parallelism**
+
+vLLM supports **Expert Parallelism (EP)** and describes it as improving locality/efficiency/throughput. ([docs.vllm.ai][8])
+For a giant MoE, EP can matter a lot—*if* your GPU topology + sharding works out.
+
+### C) **You’re actually measuring “mixed prefill+decode,” not pure encode**
+
+vLLM V1 uses chunked prefill and explicitly co-batches **compute‑bound prefill** with **memory‑bound decode**. ([docs.vllm.ai][9])
+So “prompt tok/s” can look capped if your run is dominated by decode or if decode is prioritized (which it is).
+
+### D) **Multimodal overhead (images)**
+
+The Qwen3‑VL recipe recommends:
+
+* `--mm-encoder-tp-mode data` (vision encoder is small; TP adds comm overhead) ([docs.vllm.ai][2])
+* choose cache strategy:
+
+  * mostly unique images → `--mm-processor-cache-gb 0` (avoid caching overhead)
+  * repeated images → `--mm-processor-cache-type shm` (shared-memory cache) ([docs.vllm.ai][2])
+
+If you send lots of concurrent image requests, CPU preprocessing + vision encoder can become your “encode” limiter.
+
+---
+
+## 7) What I’d do next (highest ROI) to break out of “~1k and stuck”
+
+No fluff—this is the shortest path to an answer:
+
+1. **Confirm what “encode” is** using metrics:
+
+   * sample `vllm:prompt_tokens_total` delta/sec for prefill ([docs.vllm.ai][1])
+   * run one test with `--limit-mm-per-prompt.image 0 --limit-mm-per-prompt.video 0` to isolate text-only (the recipe explicitly calls this out as a mode) ([docs.vllm.ai][2])
+
+2. **Drop `--enforce-eager`** unless you *need* it for stability/debugging. It disables CUDA graphs. ([docs.vllm.ai][7])
+
+3. **Enable `--async-scheduling`** (it’s recommended in the Qwen3‑VL guide). ([docs.vllm.ai][2])
+
+4. **Try `--enable-expert-parallel`** (MoE) and verify it’s actually taking effect. ([docs.vllm.ai][8])
+
+5. If images are common:
+
+   * ensure `--mm-encoder-tp-mode data` is set ([docs.vllm.ai][2])
+   * pick the right multimodal cache mode (`shm` vs `0`) ([docs.vllm.ai][2])
+
+6. Accept the physics:
+
+   * Spark’s **273 GB/s unified memory** is a real cap ([NVIDIA][4])
+   * cross-node TP is hampered by **no GPUDirect RDMA** ([NVIDIA Support][6])
+
+---
+
+## Bottom line
+
+If you’re asking “why can’t I get way more than ~1k tok/s prefill?”: because **235B-class inference is bandwidth + interconnect dominated**, and **DGX Spark + cross-node TP (without GPUDirect RDMA) is exactly the setup that makes prefill throughput hit a low ceiling**. The one “self-inflicted” cap I’d fix first is **`--enforce-eager`** (unless it’s mandatory for your run). ([docs.vllm.ai][7])
+
+If you paste the **exact command line** you’re running (especially whether `--enforce-eager`, `--async-scheduling`, `--enable-expert-parallel`, and your `max-model-len` are set), I can tell you which 1–2 flags are most likely responsible for the gap *in your specific case* without guessing.
+
+[1]: https://docs.vllm.ai/en/stable/design/metrics/?utm_source=chatgpt.com "Metrics - vLLM"
+[2]: https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html "Qwen3-VL Usage Guide - vLLM Recipes"
+[3]: https://qwen.readthedocs.io/en/latest/getting_started/speed_benchmark.html "Speed Benchmark - Qwen"
+[4]: https://www.nvidia.com/en-us/products/workstations/dgx-spark/?utm_source=chatgpt.com "NVIDIA DGX Spark"
+[5]: https://lmsys.org/blog/2025-10-13-nvidia-dgx-spark/?utm_source=chatgpt.com "NVIDIA DGX Spark In-Depth Review: A New Standard for ..."
+[6]: https://nvidia.custhelp.com/app/answers/detail/a_id/5780/~/is-gpudirect-rdma-supported-on-dgx-spark%3F?utm_source=chatgpt.com "Is GPUDirect RDMA supported on DGX Spark?"
+[7]: https://docs.vllm.ai/en/stable/configuration/engine_args/?utm_source=chatgpt.com "Engine Arguments - vLLM"
+[8]: https://docs.vllm.ai/en/latest/serving/expert_parallel_deployment/?utm_source=chatgpt.com "Expert Parallel Deployment - vLLM"
+[9]: https://docs.vllm.ai/en/stable/configuration/optimization/?utm_source=chatgpt.com "Optimization and Tuning - vLLM"
+
