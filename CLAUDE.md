@@ -273,6 +273,8 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Key:** `--gpu-memory-utilization 0.70` enables CUDA graphs (0.65 crashes - only 8GB KV, 0.75 crashes during capture).
 
+**Eager mode:** `--enforce-eager` disables CUDA graphs - faster startup, may reduce CPU overhead, but slower inference.
+
 **Video disabled:** `--limit-mm-per-prompt '{"video": 0}'` saves ~4GB KV (17GB vs 13GB per node). Encoder cache 16K tokens vs 153K with video.
 
 **VLM encoder profiling:** ~5 min with video disabled, ~1 hour with video enabled.
