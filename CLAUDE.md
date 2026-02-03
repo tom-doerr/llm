@@ -422,6 +422,18 @@ Both modes work. Heavy prefill queues can make throughput appear zero initially 
 
 **KV Cache:** 25.77 GiB per node, 256K max context, ~51GB total across TP=2
 
+## Embeddings Server (spark-3, Feb 2026)
+
+BGE embeddings running alongside vLLM worker on spark-3.
+
+**Script:** `./start-embeddings-spark3.sh`
+**Model:** BAAI/bge-base-en-v1.5 (768 dim)
+**Port:** 8001 | **API:** http://spark-3:8001/v1/embeddings
+
+**Settings:** `--gpu-memory-utilization 0.02 --max-num-seqs 1 --enforce-eager` (minimal footprint)
+
+**Note:** ModernBERT not compatible with vLLM `--task embed`.
+
 ## Instruct vs Thinking Variants
 
 **Instruct:** Direct answers, 15-25% faster, no `<think>` tags.
