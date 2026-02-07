@@ -265,7 +265,7 @@ vLLM serve (auto-configured 256K context, Jan 2026):
 vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
   --tensor-parallel-size 2 --trust-remote-code \
   --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
-  --max-num-batched-tokens 2048 \
+  --max-num-batched-tokens 32768 \
   --scheduling-policy priority --mm-encoder-tp-mode data \
   --limit-mm-per-prompt '{"video": 0}' \
   --distributed-executor-backend ray --host 0.0.0.0 --port 8000
@@ -398,8 +398,8 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 
 ### Scheduler Tuning
 
-**`max_num_batched_tokens`:** Default 8192 (≥70GB GPU). Lower = smoother streaming, higher = better throughput.
-Peak decode ~151 tok/s at c=64 with 32768, reverted to 8192 for lower latency.
+**`max_num_batched_tokens`:** Set to 32768 (Feb 2026). Lower = smoother streaming, higher = better throughput.
+With high prefix cache hit rates (~96%), cached tokens count against the scheduler budget but cost no compute, so a high value is needed to avoid artificially limiting concurrency.
 
 ### TP vs PP Mode
 
