@@ -74,7 +74,7 @@ else
   echo "Mode: Tensor Parallel (TP=2)"
   VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code"
 fi
-VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.70"
+VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.65"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 32768"
 VLLM_ARGS="$VLLM_ARGS --scheduling-policy priority"  # Lower priority value = higher priority
