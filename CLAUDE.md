@@ -398,8 +398,14 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 
 ### Scheduler Tuning
 
-**`max_num_batched_tokens`:** Set to 32768 (Feb 2026). Lower = smoother streaming, higher = better throughput.
-With high prefix cache hit rates (~96%), cached tokens count against the scheduler budget but cost no compute, so a high value is needed to avoid artificially limiting concurrency.
+**`max_num_batched_tokens`:** Set to 16384 (Feb 2026). 32768 caused NVIDIA driver OOM under load.
+Cached tokens count against budget but cost no compute — higher helps concurrency but risks OOM.
+
+**`max_num_partial_prefills`:** Default 1 (serializes ALL prefills in chunked-prefill mode).
+Main cause of "1 running, hundreds waiting". **Cannot increase on multi-node: >1 forces V0 engine
+fallback, incompatible with Ray (AssertionError on VLLM_USE_V1).**
+
+**`--gpu-memory-utilization`:** 0.70 minimum. 0.65 hangs (no KV cache room).
 
 ### TP vs PP Mode
 
