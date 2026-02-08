@@ -77,6 +77,7 @@ fi
 VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.70"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 16384"
+VLLM_ARGS="$VLLM_ARGS --max-num-partial-prefills 8"  # Allow 8 concurrent prefills (default=1)
 VLLM_ARGS="$VLLM_ARGS --scheduling-policy priority"  # Lower priority value = higher priority
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"  # Required for multi-node
 VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"  # GPU data parallel for vision encoder
