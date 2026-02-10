@@ -260,14 +260,15 @@ export RAY_memory_monitor_refresh_ms=0
 
 **HF_HUB_OFFLINE=1** required when DNS is broken (common on Spark WiFi issues).
 
-vLLM serve (auto-configured 256K context, Jan 2026):
+vLLM serve (auto-configured 256K context, Feb 2026):
 ```bash
-vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
+vllm serve QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ \
   --tensor-parallel-size 2 --trust-remote-code \
   --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
-  --max-num-batched-tokens 32768 \
+  --max-num-batched-tokens 4096 \
   --scheduling-policy priority --mm-encoder-tp-mode data \
-  --limit-mm-per-prompt '{"video": 0}' \
+  --limit-mm-per-prompt '{"video": 0}' --enforce-eager \
+  --enable-auto-tool-choice --tool-call-parser hermes \
   --distributed-executor-backend ray --host 0.0.0.0 --port 8000
 ```
 
@@ -333,7 +334,7 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 **Access from spark-1:** Use 10GbE IP `192.168.102.11:8000` (200G IPs only work between spark-2/spark-3)
 ```bash
 curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ","messages":[{"role":"user","content":"Hi"}],"max_tokens":64}'
+  -d '{"model":"QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ","messages":[{"role":"user","content":"Hi"}],"max_tokens":64}'
 ```
 
 **Deps:** `pip install qwen-vl-utils==0.0.14` (required for Qwen-VL)
@@ -398,7 +399,7 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 
 ### Scheduler Tuning
 
-**`max_num_batched_tokens`:** Set to 16384 (Feb 2026). 32768 caused NVIDIA driver OOM under load.
+**`max_num_batched_tokens`:** Set to 4096 (Feb 2026). Higher values (16384, 32768) caused NVIDIA driver OOM under load on unified memory.
 Cached tokens count against budget but cost no compute — higher helps concurrency but risks OOM.
 
 **`max_num_partial_prefills`:** Default 1 (serializes ALL prefills in chunked-prefill mode).
@@ -418,7 +419,7 @@ Both modes work. Heavy prefill queues can make throughput appear zero initially 
 
 **spark-2** (~700GB): AWQ Instruct/Thinking (116+117G), NVFP4 variants (127G each), BF16 Thinking (214G)
 
-**spark-3**: AWQ Instruct only (116G)
+**spark-3**: AWQ Instruct + Thinking (116+117G)
 
 **SSH:** spark-2 ↔ spark-3 keys configured.
 
@@ -442,8 +443,10 @@ BGE embeddings running alongside vLLM worker on spark-3.
 
 ## Instruct vs Thinking Variants
 
+**Current (Feb 2026):** Thinking variant (`QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ`)
+
 **Instruct:** Direct answers, 15-25% faster, no `<think>` tags.
-**Thinking:** Always reasons in `<think>` blocks, +11% math accuracy, slower.
+**Thinking:** Always reasons in `<think>` blocks, +11% math accuracy, slower. Thinking content appears inline in message content (not in `reasoning_content` field).
 
 **Thinking budget:** `thinking_budget=N` limits reasoning tokens (not yet in vLLM).
 
