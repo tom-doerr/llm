@@ -376,8 +376,17 @@
             "uid": "cfagbva82okjkf"
           },
           "expr": "sum(rate(vllm:prompt_tokens_total[30s]))",
-          "legendFormat": "Prompt tok/s",
+          "legendFormat": "Prompt tok/s (incl cache)",
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "sum(rate(vllm:prefix_cache_queries_total[30s])) - sum(rate(vllm:prefix_cache_hits_total[30s]))",
+          "legendFormat": "Prefill tok/s (non-cached)",
+          "refId": "C"
         }
       ],
       "title": "Token Throughput Over Time",
@@ -935,7 +944,9 @@
       ],
       "title": "Network Stats (spark-2 RDMA)",
       "type": "stat"
-    }
+    },
+    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":0,"y":56},"id":22,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"increase(vllm:prompt_tokens_total[24h])","instant":true,"legendFormat":"Encode","refId":"A"}],"title":"Encode Tokens (24h)","type":"stat"},
+    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":12,"y":56},"id":23,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"increase(vllm:generation_tokens_total[24h])","instant":true,"legendFormat":"Decode","refId":"A"}],"title":"Decode Tokens (24h)","type":"stat"}
   ],
   "refresh": "5s",
   "schemaVersion": 39,
