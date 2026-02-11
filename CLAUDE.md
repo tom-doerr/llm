@@ -298,6 +298,8 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ \
 
 **Single request:** ~7 tok/s streaming, **TTFT ~9s**. Script: `benchmark_vllm.py --sweep`
 
+**Thinking variant (Feb 2026 - enforce-eager, 4096 batch tokens):** ~324 tok/s at c=14 (decode-only, ~23 steps/s). Per-step latency ~43ms. Thinking model generates much longer outputs (hundreds of `<think>` tokens).
+
 **Results saved to:** `benchmark_results/<timestamp>_sweep.json` with vLLM config and latency p50/p95/p99
 
 **Prefill benchmark:** `benchmark_vllm.py --prefill`
@@ -365,6 +367,10 @@ curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: applicatio
 
 **Result:** CPU idle 8%→78%, load avg 18→3. Small latency cost on wake-up (acceptable).
 
+**Gotcha:** Stale/disconnected client connections still show as `num_requests_running` in metrics.
+When all real work is done but stale requests remain, engine sleeps → 0 tok/s despite N "running".
+A new request wakes the engine back up. Not a real problem, just misleading metrics.
+
 **CPU tuning (in script):**
 - `OMP_NUM_THREADS=1` - Enabled, reduces threading overhead
 - `RAY_DEDUP_LOGS=1` - Optional, reduces log overhead
@@ -402,9 +408,12 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 **`max_num_batched_tokens`:** Set to 4096 (Feb 2026). Higher values (16384, 32768) caused NVIDIA driver OOM under load on unified memory.
 Cached tokens count against budget but cost no compute — higher helps concurrency but risks OOM.
 
-**`max_num_partial_prefills`:** Default 1 (serializes ALL prefills in chunked-prefill mode).
-Main cause of "1 running, hundreds waiting". **Cannot increase on multi-node: >1 forces V0 engine
-fallback, incompatible with Ray (AssertionError on VLLM_USE_V1).**
+**`max_num_partial_prefills`:** Default 1. **Dead code in vLLM V1 0.11.0** — the V1 scheduler
+does NOT reference this setting. Mixed prefill (prefill + decode in same step) works by default.
+The scheduler schedules all RUNNING requests first (1 decode token each), then fills remaining
+budget with WAITING request prefills. No artificial serialization.
+
+**Note:** Earlier vLLM versions forced V0 fallback when >1. In 0.11.0 V1, this is irrelevant.
 
 **`--gpu-memory-utilization`:** 0.70 minimum. 0.65 hangs (no KV cache room).
 
