@@ -326,6 +326,8 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ \
 
 **Encoder cache:** vLLM automatically caches image encoder outputs by content hash (blake3). No explicit ID needed - same image bytes = cache hit. Cache is in-memory on worker node.
 
+**Async encoder (custom branch):** ViT runs on a separate CUDA stream overlapping with CPU input prep. See `vllm/` clone below.
+
 **Metrics note:** `prompt_tokens_total` includes cache hits. Real prefill compute = queries - hits.
 **Chunked prefill:** Enabled by default in vLLM V1. Tune via `--max-num-batched-tokens`.
 
@@ -532,3 +534,17 @@ Can be dramatically faster. May OOM in TP scenarios.
 **Services:** langfuse-web, langfuse-worker, postgres, clickhouse, redis
 
 `docker compose -f ~/llm/langfuse/docker-compose.yml {ps|up -d|down}`
+
+## vLLM Local Clone (Feb 2026)
+
+**Dir:** `~/llm/vllm/` | **Branch:** `custom` (based on `main` at `05339a7b2`)
+
+**Async ViT encoder patch:** Overlaps image encoding with CPU input preparation using a separate CUDA stream.
+
+Files changed:
+- `vllm/v1/worker/gpu_model_runner.py` — async launch before `_prepare_inputs`, sync before `_preprocess`
+- `vllm/v1/worker/gpu/mm/encoder_runner.py` — cache-check optimization
+
+**Deploy:** Mount modified vllm into the NGC container or build a custom image.
+
+**Guards:** Skips async path for LoRA, encoder-decoder models, and mm_processor_stats. Falls back to sync on error.
