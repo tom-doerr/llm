@@ -10,7 +10,7 @@ for arg in "$@"; do
   [[ "$arg" == "--pp" ]] && USE_PP=1
 done
 
-MODEL="QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ"
+MODEL="QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
 CONTAINER="nvcr.io/nvidia/vllm:25.11-py3"
 OOB_IF="enp1s0f1np1"  # Control plane interface
 HEAD_IP="192.168.100.10"
