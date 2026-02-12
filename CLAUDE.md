@@ -231,7 +231,7 @@ Container: `nvcr.io/nvidia/vllm:25.11-py3`
 
 **VERIFIED WORKING (Jan 2026):** ~3 min model load, ~5s TTFT
 
-**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM across spark-2/spark-3, dual-rail RDMA)
+**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM across spark-2/spark-3, dual-rail RDMA, auto-restart on failure)
 
 Docs: https://build.nvidia.com/spark/vllm/stacked-sparks
 
@@ -426,6 +426,14 @@ budget with WAITING request prefills. No artificial serialization.
 
 Both modes work. Heavy prefill queues can make throughput appear zero initially - wait for ramp-up.
 
+### Auto-Restart on Failure (Feb 2026)
+
+Two layers: Docker `--restart=on-failure:10` on both containers + vLLM retry loop (10 retries, 15s delay) in head entrypoint.
+
+**Entrypoints:** `vllm-head-entrypoint.sh` (Ray head + vLLM retry loop), `vllm-worker-entrypoint.sh` (Ray worker with retry-connect loop)
+
+**Recovery:** vLLM crash → head retries vLLM. Container crash → Docker restarts → worker retries Ray join → head waits for worker → vLLM starts.
+
 ## Model Cache (Jan 2026)
 
 **spark-2** (~700GB): AWQ Instruct/Thinking (116+117G), NVFP4 variants (127G each), BF16 Thinking (214G)
@@ -545,6 +553,8 @@ Files changed:
 - `vllm/v1/worker/gpu_model_runner.py` — async launch before `_prepare_inputs`, sync before `_preprocess`
 - `vllm/v1/worker/gpu/mm/encoder_runner.py` — cache-check optimization
 
-**Deploy:** Mount modified vllm into the NGC container or build a custom image.
+**Deploy:** Mount into NGC container: `-v ~/llm/vllm/vllm:/usr/lib/python3/dist-packages/vllm`
 
-**Guards:** Skips async path for LoRA, encoder-decoder models, and mm_processor_stats. Falls back to sync on error.
+**Guards:** Skips async for LoRA, encoder-decoder, mm_processor_stats. Falls back to sync on error.
+
+**Status:** Implemented, not yet tested on spark-2/spark-3.
