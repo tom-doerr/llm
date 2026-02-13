@@ -918,25 +918,25 @@
       },
       "targets": [
         {
-          "expr": "avg_over_time(rate(node_network_receive_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s])[$__range:])",
+          "expr": "avg_over_time(sum(rate(node_network_receive_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s]))[$__range:])",
           "instant": true,
           "legendFormat": "Avg RX",
           "refId": "A"
         },
         {
-          "expr": "max_over_time(rate(node_network_receive_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s])[$__range:])",
+          "expr": "max_over_time(sum(rate(node_network_receive_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s]))[$__range:])",
           "instant": true,
           "legendFormat": "Peak RX",
           "refId": "B"
         },
         {
-          "expr": "avg_over_time(rate(node_network_transmit_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s])[$__range:])",
+          "expr": "avg_over_time(sum(rate(node_network_transmit_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s]))[$__range:])",
           "instant": true,
           "legendFormat": "Avg TX",
           "refId": "C"
         },
         {
-          "expr": "max_over_time(rate(node_network_transmit_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s])[$__range:])",
+          "expr": "max_over_time(sum(rate(node_network_transmit_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s]))[$__range:])",
           "instant": true,
           "legendFormat": "Peak TX",
           "refId": "D"

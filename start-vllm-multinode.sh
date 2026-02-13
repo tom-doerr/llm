@@ -39,10 +39,12 @@ ENV_WORKER="$ENV -e VLLM_HOST_IP=$WORKER_IP"
 
 VOLS="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS="$VOLS -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
+VOLS="$VOLS -v /home/tom/llm/vllm/vllm:/usr/lib/python3/dist-packages/vllm"
 VOLS="$VOLS -v /tmp/vllm-head-entrypoint.sh:/entrypoint.sh:ro"
 VOLS="$VOLS -v /tmp/vllm-serve-cmd.sh:/vllm-serve-cmd.sh:ro"
 VOLS_WORKER="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS_WORKER="$VOLS_WORKER -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
+VOLS_WORKER="$VOLS_WORKER -v /home/tom/llm/vllm/vllm:/usr/lib/python3/dist-packages/vllm"
 VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm-worker-entrypoint.sh:/entrypoint.sh:ro"
 
 echo "=== Deploying entrypoint scripts ==="

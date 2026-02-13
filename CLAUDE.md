@@ -231,7 +231,7 @@ Container: `nvcr.io/nvidia/vllm:25.11-py3`
 
 **VERIFIED WORKING (Jan 2026):** ~3 min model load, ~5s TTFT
 
-**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM across spark-2/spark-3, dual-rail RDMA, auto-restart on failure)
+**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM across spark-2/spark-3, dual-rail RDMA, mounts custom vLLM with async encoder)
 
 Docs: https://build.nvidia.com/spark/vllm/stacked-sparks
 
@@ -262,7 +262,7 @@ export RAY_memory_monitor_refresh_ms=0
 
 vLLM serve (auto-configured 256K context, Feb 2026):
 ```bash
-vllm serve QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ \
+vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
   --tensor-parallel-size 2 --trust-remote-code \
   --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
   --max-num-batched-tokens 4096 \
@@ -338,7 +338,7 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ \
 **Access from spark-1:** Use 10GbE IP `192.168.102.11:8000` (200G IPs only work between spark-2/spark-3)
 ```bash
 curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ","messages":[{"role":"user","content":"Hi"}],"max_tokens":64}'
+  -d '{"model":"QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ","messages":[{"role":"user","content":"Hi"}],"max_tokens":64}'
 ```
 
 **Deps:** `pip install qwen-vl-utils==0.0.14` (required for Qwen-VL)
@@ -462,7 +462,7 @@ BGE embeddings running alongside vLLM worker on spark-3.
 
 ## Instruct vs Thinking Variants
 
-**Current (Feb 2026):** Thinking variant (`QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ`)
+**Current (Feb 2026):** Instruct variant (`QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ`) with async encoder patch
 
 **Instruct:** Direct answers, 15-25% faster, no `<think>` tags.
 **Thinking:** Always reasons in `<think>` blocks, +11% math accuracy, slower. Thinking content appears inline in message content (not in `reasoning_content` field).
@@ -497,7 +497,9 @@ Can be dramatically faster. May OOM in TP scenarios.
 **Dashboard:** `grafana/vllm-dashboard.json` (UID: `vllm-spark`)
 **URL:** http://localhost:3000/d/vllm-spark
 
-**Panels (20):** Requests, KV Cache, Throughput stats, Token Throughput, E2E/Prefill Latency, Decode vs Prefill, Prompt/Completion Length (p1/p50/p95/p99), GPU Util/Power/Temp, CPU/RAM %, Network RDMA
+**Panels (20+):** Requests, KV Cache, Throughput stats, Token Throughput, E2E/Prefill Latency, Decode vs Prefill, Prompt/Completion Length, GPU Util/Power/Temp, CPU/RAM %, Network RDMA, Encode/Decode Tokens (24h)
+
+**RDMA stats panel:** Queries use `sum()` across both interfaces for aggregate throughput (not per-device).
 
 **Exporters:** vLLM :8000, node_exporter :9100 (spark-1/2), dcgm-exporter :9400 (spark-2)
 
@@ -557,4 +559,4 @@ Files changed:
 
 **Guards:** Skips async for LoRA, encoder-decoder, mm_processor_stats. Falls back to sync on error.
 
-**Status:** Implemented, not yet tested on spark-2/spark-3.
+**Status:** Deployed and tested on spark-2/spark-3 (Feb 2026). No errors under concurrent image load.
