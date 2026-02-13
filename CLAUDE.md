@@ -272,9 +272,9 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
   --distributed-executor-backend ray --host 0.0.0.0 --port 8000
 ```
 
-**Key:** `--gpu-memory-utilization 0.70` enables CUDA graphs (0.65 crashes - only 8GB KV, 0.75 crashes during capture).
+**Key:** `--gpu-memory-utilization 0.70` (0.65 crashes - only 8GB KV, 0.75 crashes during capture).
 
-**Eager mode:** `--enforce-eager` disables CUDA graphs - faster startup, lower CPU overhead.
+**Eager mode (REQUIRED for multi-node):** `--enforce-eager` disables CUDA graphs. CUDA graphs **hurt** multi-node perf on Spark: 2x worse at c=1 (8 vs 17 tok/s), ~20% worse at c=256 (200 vs 249 tok/s). Likely due to Ray compiled DAG + piecewise graph overhead.
 
 **Tool calling:** `--enable-auto-tool-choice --tool-call-parser hermes` enables function/tool calling.
 
@@ -298,24 +298,35 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Single request:** ~7 tok/s streaming, **TTFT ~9s**. Script: `benchmark_vllm.py --sweep`
 
-**Thinking variant (Feb 2026 - enforce-eager, 4096 batch tokens):** ~324 tok/s at c=14 (decode-only, ~23 steps/s). Per-step latency ~43ms. Thinking model generates much longer outputs (hundreds of `<think>` tokens).
+**Thinking variant (Feb 2026 - enforce-eager, 4096 batch tokens):** ~324 tok/s at c=14 (decode-only, ~23 steps/s).
 
-**Results saved to:** `benchmark_results/<timestamp>_sweep.json` with vLLM config and latency p50/p95/p99
+**Instruct + async encoder (Feb 2026):**
+
+| Concurrency | dec tok/s | p50 |
+|-------------|-----------|-----|
+| 1 | 17.1 | 1.87s |
+| 64 | 250.1 | 7.64s |
+| 256 | **248.9** | 18.95s |
+
+**Results saved to:** `benchmark_results/<timestamp>_sweep.json`
 
 **Prefill benchmark:** `benchmark_vllm.py --prefill`
 | Tokens | Enc tok/s |
 |--------|-----------|
-| 1K | 1,064 |
-| 8K | 909 |
-| 32K | 459 |
-| 64K | 288 |
+| 1K | 1,270 |
+| 8K | 1,010 |
+| 32K | 525 |
+| 64K | 319 |
+| 128K | 177 |
 
 **Image benchmark:** `benchmark_vllm.py --image`
 
 | Resolution | c=32 tok/s |
 |------------|------------|
-| 256×256 | 240 |
-| 512×512 | 608 |
+| 256×256 | 371 |
+| 512×512 | 862 |
+| 1024×1024 | 950 |
+| 2048×2048 | 1,320 |
 
 **Note:** `--mm-encoder-tp-mode data` enabled for ~2x image throughput. Encoder profiling takes ~1 hour on first startup.
 

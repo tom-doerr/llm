@@ -76,7 +76,7 @@ VLLM_ARGS="$VLLM_ARGS --scheduling-policy priority"  # Lower priority value = hi
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"  # Required for multi-node
 VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"  # GPU data parallel for vision encoder
 VLLM_ARGS="$VLLM_ARGS --limit-mm-per-prompt '{\"video\": 0}'"  # Disable video input
-VLLM_ARGS="$VLLM_ARGS --enforce-eager"  # Disable CUDA graphs (test CPU usage)
+VLLM_ARGS="$VLLM_ARGS --enforce-eager"  # CUDA graphs hurt multi-node perf on Spark
 VLLM_ARGS="$VLLM_ARGS --enable-auto-tool-choice --tool-call-parser hermes"
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
