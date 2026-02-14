@@ -1,0 +1,87 @@
+{
+  "config": {
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ",
+          "object": "model",
+          "created": 1771014723,
+          "owned_by": "vllm",
+          "root": "QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ",
+          "parent": null,
+          "max_model_len": 262144,
+          "permission": [
+            {
+              "id": "modelperm-83bb03d4a4f0438684516c216cf57a67",
+              "object": "model_permission",
+              "created": 1771014723,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "url": "http://192.168.102.11:8000"
+  },
+  "results": [
+    {
+      "target": 128,
+      "actual": 182.0,
+      "enc_tok_s": 525.6401697835921
+    },
+    {
+      "target": 512,
+      "actual": 681.0,
+      "enc_tok_s": 1053.0693468497286
+    },
+    {
+      "target": 1024,
+      "actual": 1347.0,
+      "enc_tok_s": 1269.89911741896
+    },
+    {
+      "target": 2048,
+      "actual": 2678.0,
+      "enc_tok_s": 1304.8199256293801
+    },
+    {
+      "target": 4096,
+      "actual": 5340.0,
+      "enc_tok_s": 1195.4820592396684
+    },
+    {
+      "target": 8192,
+      "actual": 10665.0,
+      "enc_tok_s": 1010.2267118940712
+    },
+    {
+      "target": 16384,
+      "actual": 21314.8,
+      "enc_tok_s": 774.1667338234433
+    },
+    {
+      "target": 32768,
+      "actual": 42614.0,
+      "enc_tok_s": 525.0619117342793
+    },
+    {
+      "target": 65536,
+      "actual": 85212.0,
+      "enc_tok_s": 318.46201486250817
+    },
+    {
+      "target": 131072,
+      "actual": 170409.0,
+      "enc_tok_s": 176.94273515254957
+    }
+  ]
+}

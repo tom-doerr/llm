@@ -330,6 +330,25 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
 
 **Note:** `--mm-encoder-tp-mode data` enabled for ~2x image throughput. Encoder profiling takes ~1 hour on first startup.
 
+**vllm bench serve results (Feb 2026 - Instruct, enforce-eager, async encoder):**
+
+Text-only:
+| Config | Out tok/s | Peak | TTFT p50 | TPOT p50 |
+|--------|----------|------|---------|---------|
+| c=1, 128/128 | 10 | 22 | 120ms | 46ms |
+| c=50, 128/128 | 175 | 300 | 3.6s | 254ms |
+| c=100, 512/256 | 216 | 400 | 16.4s | 394ms |
+| 2rps, 256/256 | 55 | 90 | ~0ms | 126ms |
+
+Multimodal (random-mm, synthetic images):
+| Config | Out tok/s | Peak | TTFT p50 | TPOT p50 |
+|--------|----------|------|---------|---------|
+| c=30, 256/512px | 56 | 174 | 34.7s | 247ms |
+| c=20, 720p | 13 | 133 | 101s | 641ms |
+| 1rps, 256/512px | 42 | 120 | 17.8s | 221ms |
+
+**Results:** `benchmark_results/vllm-bench/*.json`
+
 **Video support:** Tested up to 541MB / 30 min (1.2GB / 1hr crashes server). Processing time ~4 min regardless of length (frame sampling). Send as base64 data URL:
 ```python
 {"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{b64}"}}
