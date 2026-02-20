@@ -262,7 +262,7 @@ export RAY_memory_monitor_refresh_ms=0
 
 vLLM serve (auto-configured 256K context, Feb 2026):
 ```bash
-vllm serve QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ \
+vllm serve QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ \
   --tensor-parallel-size 2 --trust-remote-code \
   --quantization awq --gpu-memory-utilization 0.70 --kv-cache-dtype fp8 \
   --max-num-batched-tokens 4096 \
@@ -348,6 +348,8 @@ Multimodal (random-mm, synthetic images):
 | 1rps, 256/512px | 42 | 120 | 17.8s | 221ms |
 
 **Results:** `benchmark_results/vllm-bench/*.json`
+
+**vllm bench serve usage:** `docker exec vllm-head vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --base-url http://localhost:8000 --model <model> --dataset-name random-mm --trust-remote-code` (termplotlib+gnuplot installed for plots)
 
 **Video support:** Tested up to 541MB / 30 min (1.2GB / 1hr crashes server). Processing time ~4 min regardless of length (frame sampling). Send as base64 data URL:
 ```python
@@ -492,7 +494,7 @@ BGE embeddings running alongside vLLM worker on spark-3.
 
 ## Instruct vs Thinking Variants
 
-**Current (Feb 2026):** Instruct variant (`QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ`) with async encoder patch
+**Current (Feb 2026):** Thinking variant (`QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ`) with async encoder patch
 
 **Instruct:** Direct answers, 15-25% faster, no `<think>` tags.
 **Thinking:** Always reasons in `<think>` blocks, +11% math accuracy, slower. Thinking content appears inline in message content (not in `reasoning_content` field).
