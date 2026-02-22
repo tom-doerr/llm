@@ -494,7 +494,15 @@ BGE embeddings running alongside vLLM worker on spark-3.
 
 ## Instruct vs Thinking Variants
 
-**Current (Feb 2026):** Thinking variant (`QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ`) with async encoder patch
+**Current (Feb 2026):** Thinking variant (`QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ`)
+
+**Qwen3.5-397B-A17B (Feb 2026):** NOT DEPLOYABLE on Spark. The only available quantization
+(`vincentzed-hf/Qwen3.5-397B-A17B-NVFP4`, ~240GB, ModelOpt FP4) is built for SGLang and
+incompatible with vLLM TP weight splitting (weight shape mismatch: [512, 4096] vs expected
+[512, 2048]). No AWQ variant exists. FP8 is too large (406GB). vLLM native support requires
+v0.15.0+ but NGC 26.01 only has v0.13.0, and nightly wheels are CUDA 12 only (NGC has CUDA 13.1).
+PP=2 mode also fails (falls back to transformers backend which lacks Qwen3.5 support).
+Model downloaded on spark-2/spark-3 at `~/.cache/huggingface/hub/models--vincentzed-hf--Qwen3.5-397B-A17B-NVFP4/`.
 
 **Instruct:** Direct answers, 15-25% faster, no `<think>` tags.
 **Thinking:** Always reasons in `<think>` blocks, +11% math accuracy, slower. Thinking content appears inline in message content (not in `reasoning_content` field).
@@ -588,6 +596,11 @@ Files changed:
 - `vllm/v1/worker/gpu/mm/encoder_runner.py` — cache-check optimization
 
 **Deploy:** Mount into NGC container: `-v ~/llm/vllm/vllm:/usr/lib/python3/dist-packages/vllm`
+
+**CRITICAL:** This mount is REQUIRED. NGC 25.11 ships transformers 5.3.0.dev0 which removed
+`all_special_tokens_extended` attribute. The bundled vLLM 0.11.0 references it in
+`transformers_utils/tokenizer.py:99`. The local clone fixes this. Without the mount, vLLM
+crashes with `AttributeError: Qwen2Tokenizer has no attribute all_special_tokens_extended`.
 
 **Guards:** Skips async for LoRA, encoder-decoder, mm_processor_stats. Falls back to sync on error.
 
