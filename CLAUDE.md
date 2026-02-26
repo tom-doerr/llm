@@ -167,6 +167,11 @@ Interface `enP7s7` on both machines.
 
 **Tested:** ~1 GB/s rsync throughput (Jan 2026)
 
+## 200G QSFP Links: spark-1 ↔ spark-2 and spark-1 ↔ spark-3
+
+Both links UP at 200G but **no IPs assigned** (port 0: `enp1s0f0np0`).
+Needed for PP=3 Qwen3.5 deployment across all 3 Sparks.
+
 ## Multi-Node Inference (Qwen3-VL-235B-AWQ)
 
 ### SGLang Multi-Node TP=2 (Jan 2026)
@@ -480,6 +485,24 @@ Two layers: Docker `--restart=on-failure:10` on both containers + vLLM retry loo
 
 **KV Cache:** 25.77 GiB per node, 256K max context, ~51GB total across TP=2
 
+## Qwen3.5-397B-A17B llama.cpp Deployment (Feb 2026)
+
+**Status:** RUNNING. Q2_K via llama.cpp RPC across spark-2 + spark-3.
+
+**Script:** `./start-llamacpp-multinode.sh [model_path]`
+**Containers:** `llamacpp-head` (spark-2), `llamacpp-rpc` (spark-3)
+**Image:** NGC vllm:26.01-py3 base + mounted `~/llama.cpp/build/bin/`
+**API:** `http://192.168.102.11:8000/v1/chat/completions`
+
+**Performance:** ~43 tok/s prefill, ~15.6 tok/s decode (layer-split, not TP)
+**Model split:** 67 GB spark-2 (CUDA0) + 71 GB spark-3 (RPC0)
+**Build:** `DCMAKE_CUDA_ARCHITECTURES=native` → sm_121a (GB10)
+**Vision:** mmproj-BF16.gguf downloaded, use `MMPROJ=<path>` to enable
+
+**Q2_K on llama.cpp:** Works perfectly. vLLM GGUF patches caused garbage.
+**Q3_K_M:** Still downloading shard 3 on spark-3 (ISP throttled).
+**122B downloads:** FP8, NVFP4, AWQ-4bit downloading on spark-2.
+
 ## Embeddings Server (spark-3, Feb 2026)
 
 BGE embeddings running alongside vLLM worker on spark-3.
@@ -496,13 +519,9 @@ BGE embeddings running alongside vLLM worker on spark-3.
 
 **Current (Feb 2026):** Thinking variant (`QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ`)
 
-**Qwen3.5-397B-A17B (Feb 2026):** NOT DEPLOYABLE on Spark. The only available quantization
-(`vincentzed-hf/Qwen3.5-397B-A17B-NVFP4`, ~240GB, ModelOpt FP4) is built for SGLang and
-incompatible with vLLM TP weight splitting (weight shape mismatch: [512, 4096] vs expected
-[512, 2048]). No AWQ variant exists. FP8 is too large (406GB). vLLM native support requires
-v0.15.0+ but NGC 26.01 only has v0.13.0, and nightly wheels are CUDA 12 only (NGC has CUDA 13.1).
-PP=2 mode also fails (falls back to transformers backend which lacks Qwen3.5 support).
-Model downloaded on spark-2/spark-3 at `~/.cache/huggingface/hub/models--vincentzed-hf--Qwen3.5-397B-A17B-NVFP4/`.
+**Qwen3.5-397B-A17B (Feb 2026):** GGUF Q3_K_M deployment in progress on vLLM TP=2.
+NVFP4 failed (unsplittable for TP). GGUF uses custom vLLM branch with 30+ patches.
+Chat template includes `<think>` block (thinking model).
 
 **Instruct:** Direct answers, 15-25% faster, no `<think>` tags.
 **Thinking:** Always reasons in `<think>` blocks, +11% math accuracy, slower. Thinking content appears inline in message content (not in `reasoning_content` field).
