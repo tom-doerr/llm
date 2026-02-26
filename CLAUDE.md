@@ -490,18 +490,25 @@ Two layers: Docker `--restart=on-failure:10` on both containers + vLLM retry loo
 **Status:** RUNNING. Q2_K via llama.cpp RPC across spark-2 + spark-3.
 
 **Script:** `./start-llamacpp-multinode.sh [model_path]`
+**Env vars:** `NP=16` (parallel slots), `CTX_SIZE=` (auto-fit), `MMPROJ=<path>` (vision)
 **Containers:** `llamacpp-head` (spark-2), `llamacpp-rpc` (spark-3)
 **Image:** NGC vllm:26.01-py3 base + mounted `~/llama.cpp/build/bin/`
 **API:** `http://192.168.102.11:8000/v1/chat/completions`
+**Open WebUI:** http://localhost:7070 (model auto-discovered via OpenAI API)
+**Metrics:** `--metrics` flag, Prometheus scrapes `:8000/metrics` (`llamacpp:` prefix)
+**Build:** `CMAKE_CUDA_ARCHITECTURES=native` → sm_121a (GB10)
 
-**Performance:** ~43 tok/s prefill, ~15.6 tok/s decode (layer-split, not TP)
+**Performance (single):** ~43 tok/s prefill, ~15.6 tok/s decode (64.7ms/tok)
 **Model split:** 67 GB spark-2 (CUDA0) + 71 GB spark-3 (RPC0)
-**Build:** `DCMAKE_CUDA_ARCHITECTURES=native` → sm_121a (GB10)
-**Vision:** mmproj-BF16.gguf downloaded, use `MMPROJ=<path>` to enable
+**Architecture:** Layer-split (pipeline parallel via RPC), NOT tensor parallel
 
-**Q2_K on llama.cpp:** Works perfectly. vLLM GGUF patches caused garbage.
-**Q3_K_M:** Still downloading shard 3 on spark-3 (ISP throttled).
-**122B downloads:** FP8, NVFP4, AWQ-4bit downloading on spark-2.
+**Parallel (np=16):** Text 33.5 tok/s at c=16. Image+decode 13.8 tok/s at c=16.
+
+**Vision:** mmproj-BF16.gguf for image input. Max tokens: 4,113 (>=2048px).
+Encoding: 512px=2s, 1024px=5.4s, 2048px=24s. Not parallelized across requests.
+Video: not supported natively — send frames as multi-image.
+
+**Slot sizing:** np=128→2K/slot (too small for images). np=16→~16K/slot (good).
 
 ## Embeddings Server (spark-3, Feb 2026)
 
@@ -519,8 +526,8 @@ BGE embeddings running alongside vLLM worker on spark-3.
 
 **Current (Feb 2026):** Thinking variant (`QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ`)
 
-**Qwen3.5-397B-A17B (Feb 2026):** GGUF Q3_K_M deployment in progress on vLLM TP=2.
-NVFP4 failed (unsplittable for TP). GGUF uses custom vLLM branch with 30+ patches.
+**Qwen3.5-397B-A17B (Feb 2026):** Q2_K GGUF via llama.cpp (working).
+vLLM GGUF had GemmaRMSNorm + MXFP4 nibble bugs → garbage output.
 Chat template includes `<think>` block (thinking model).
 
 **Instruct:** Direct answers, 15-25% faster, no `<think>` tags.
@@ -555,12 +562,12 @@ Can be dramatically faster. May OOM in TP scenarios.
 
 **Dashboard:** `grafana/vllm-dashboard.json` (UID: `vllm-spark`)
 **URL:** http://localhost:3000/d/vllm-spark
+**Title:** "Inference Server (spark-2/spark-3)" — unified for vLLM + llama.cpp
 
-**Panels (20+):** Requests, KV Cache, Throughput stats, Token Throughput, E2E/Prefill Latency, Decode vs Prefill, Prompt/Completion Length, GPU Util/Power/Temp, CPU/RAM %, Network RDMA, Encode/Decode Tokens (24h)
+**Metrics:** Queries use `or` to show both `vllm:` and `llamacpp:` prefixes.
+Whichever server runs on :8000 gets scraped automatically.
 
-**RDMA stats panel:** Queries use `sum()` across both interfaces for aggregate throughput (not per-device).
-
-**Exporters:** vLLM :8000, node_exporter :9100 (spark-1/2), dcgm-exporter :9400 (spark-2)
+**Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100, dcgm :9400
 
 **Config files:** `prometheus.yml`, `systemd/node-exporter.service`
 
