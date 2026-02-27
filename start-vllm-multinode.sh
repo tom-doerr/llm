@@ -10,8 +10,8 @@ for arg in "$@"; do
   [[ "$arg" == "--pp" ]] && USE_PP=1
 done
 
-MODEL="QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ"
-CONTAINER="nvcr.io/nvidia/vllm:25.11-py3"
+MODEL="${MODEL:-Qwen/Qwen3.5-122B-A10B-FP8}"
+CONTAINER="${CONTAINER:-vllm/vllm-openai:qwen3_5-cu130}"
 OOB_IF="enp1s0f1np1"  # Control plane interface
 HEAD_IP="192.168.100.10"
 WORKER_IP="192.168.100.11"
@@ -26,6 +26,10 @@ ENV="$ENV -e HF_HUB_OFFLINE=1"
 ENV="$ENV -e VLLM_SLEEP_WHEN_IDLE=1"  # Reduce CPU when idle (small latency cost)
 ENV="$ENV -e OMP_NUM_THREADS=1"  # Reduce threading overhead
 ENV="$ENV -e VLLM_USE_RAY_COMPILED_DAG=0"  # Disable compiled DAG
+ENV="$ENV -e RAY_CGRAPH_get_timeout=600"  # Increase compiled DAG timeout for encoder warmup
+ENV="$ENV -e VLLM_TEST_FORCE_FP8_MARLIN=1"  # Force Marlin MoE backend - CUTLASS crashes on sm_121a
+ENV="$ENV -e VLLM_ENCODER_CACHE_TOKENS=131072"  # 128K encoder cache (~0.75 GiB), decoupled from max_num_batched_tokens
+# ENV="$ENV -e VLLM_NVFP4_GEMM_BACKEND=marlin"  # NVFP4-only, not needed for FP8
 # Note: VLLM_USE_RAY_COMPILED_DAG=0 may not work for multi-node - vLLM V1 forces it to 1
 
 if [ "$DEBUG_NCCL" = "1" ]; then
@@ -39,17 +43,21 @@ ENV_WORKER="$ENV -e VLLM_HOST_IP=$WORKER_IP"
 
 VOLS="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS="$VOLS -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
-VOLS="$VOLS -v /home/tom/llm/vllm/vllm:/usr/lib/python3/dist-packages/vllm"
-VOLS="$VOLS -v /tmp/vllm-head-entrypoint.sh:/entrypoint.sh:ro"
+VOLS="$VOLS -v /tmp/vllm-head-ep.sh:/entrypoint.sh:ro"
 VOLS="$VOLS -v /tmp/vllm-serve-cmd.sh:/vllm-serve-cmd.sh:ro"
+VOLS="$VOLS -v /tmp/qwen3_5.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_5.py:ro"
+VOLS="$VOLS -v /tmp/vllm_scheduler_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/config/scheduler.py:ro"
 VOLS_WORKER="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS_WORKER="$VOLS_WORKER -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
-VOLS_WORKER="$VOLS_WORKER -v /home/tom/llm/vllm/vllm:/usr/lib/python3/dist-packages/vllm"
-VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm-worker-entrypoint.sh:/entrypoint.sh:ro"
+VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm-worker-ep.sh:/entrypoint.sh:ro"
+VOLS_WORKER="$VOLS_WORKER -v /tmp/qwen3_5.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_5.py:ro"
+VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm_scheduler_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/config/scheduler.py:ro"
 
 echo "=== Deploying entrypoint scripts ==="
-scp -q /home/tom/llm/vllm-head-entrypoint.sh spark-2:/tmp/vllm-head-entrypoint.sh
-scp -q /home/tom/llm/vllm-worker-entrypoint.sh spark-3:/tmp/vllm-worker-entrypoint.sh
+scp -q /home/tom/llm/vllm-head-entrypoint.sh spark-2:/tmp/vllm-head-ep.sh
+scp -q /home/tom/llm/vllm-worker-entrypoint.sh spark-3:/tmp/vllm-worker-ep.sh
+scp -q /home/tom/llm/vllm_scheduler_patched.py spark-2:/tmp/vllm_scheduler_patched.py
+scp -q /home/tom/llm/vllm_scheduler_patched.py spark-3:/tmp/vllm_scheduler_patched.py
 
 echo "=== Cleanup ==="
 ssh spark-2 "docker rm -f vllm-head 2>/dev/null || true"
@@ -69,15 +77,12 @@ else
   echo "Mode: Tensor Parallel (TP=2)"
   VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code"
 fi
-VLLM_ARGS="$VLLM_ARGS --quantization awq --gpu-memory-utilization 0.70"
+VLLM_ARGS="$VLLM_ARGS --gpu-memory-utilization 0.70"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 4096"
-VLLM_ARGS="$VLLM_ARGS --scheduling-policy priority"  # Lower priority value = higher priority
-VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"  # Required for multi-node
-VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"  # GPU data parallel for vision encoder
-VLLM_ARGS="$VLLM_ARGS --limit-mm-per-prompt '{\"video\": 0}'"  # Disable video input
-VLLM_ARGS="$VLLM_ARGS --enforce-eager"  # CUDA graphs hurt multi-node perf on Spark
-VLLM_ARGS="$VLLM_ARGS --enable-auto-tool-choice --tool-call-parser hermes"
+VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"
+VLLM_ARGS="$VLLM_ARGS --enforce-eager"
+VLLM_ARGS="$VLLM_ARGS --limit-mm-per-prompt '{\"video\": 0}'"
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
 echo "#!/bin/bash" > /home/tom/llm/vllm-serve-cmd.sh
@@ -87,13 +92,13 @@ ENV_WORKER="$ENV_WORKER -e RAY_HEAD_IP=$HEAD_IP"
 
 echo "=== Starting worker on spark-3 ==="
 ssh spark-3 "docker run -d --name vllm-worker --gpus all --shm-size 16g \\
-    --network host --ipc host --restart=on-failure:10 \\
-    $RDMA $ENV_WORKER $VOLS_WORKER $CONTAINER bash /entrypoint.sh"
+    --network host --ipc host --restart=on-failure:10 --entrypoint bash \\
+    $RDMA $ENV_WORKER $VOLS_WORKER $CONTAINER /entrypoint.sh"
 
 echo "=== Starting head on spark-2 ==="
 ssh spark-2 "docker run -d --name vllm-head --gpus all --shm-size 16g \\
-    --network host --ipc host --restart=on-failure:10 \\
-    $RDMA $ENV_HEAD $VOLS $CONTAINER bash /entrypoint.sh"
+    --network host --ipc host --restart=on-failure:10 --entrypoint bash \\
+    $RDMA $ENV_HEAD $VOLS $CONTAINER /entrypoint.sh"
 
 echo "=== Containers started (auto-restart on failure) ==="
 echo "Head logs:   ssh spark-2 'docker logs -f vllm-head'"

@@ -25,7 +25,7 @@ async def run_benchmark(url, model, prompt, max_tokens, num_requests, concurrenc
 
 URL = "http://192.168.102.11:8000/v1/chat/completions"
 BASE_URL = "http://192.168.102.11:8000"
-MODEL = "QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ"
+MODEL = "Qwen/Qwen3.5-122B-A10B-FP8"
 RESULTS_DIR = os.path.expanduser("~/llm/benchmark_results")
 WORDS = ["the","be","to","of","and","a","in","that","have","it","for","not","on",
     "with","as","you","do","at","this","but","by","from","they","we","say","or"]
@@ -63,7 +63,12 @@ async def img_req(s, url, model, b64, mt):
     c = [{"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{b64}"}},
          {"type":"text","text":"Describe."}]
     async with s.post(url, json={"model":model,"messages":[{"role":"user","content":c}],
-        "max_tokens":mt}) as r: d=await r.json(); return d["usage"]["prompt_tokens"]
+        "max_tokens":mt}) as r:
+        d=await r.json()
+        if "error" in d:
+            print(f"  ERR: {d['error'].get('message','?')[:80]}", flush=True)
+            return 0
+        return d["usage"]["prompt_tokens"]
 
 def run_img(w,h,n,c):
     b=gen_image_b64(w,h);sem=asyncio.Semaphore(c);t=aiohttp.ClientTimeout(total=600)

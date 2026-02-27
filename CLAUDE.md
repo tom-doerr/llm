@@ -485,6 +485,30 @@ Two layers: Docker `--restart=on-failure:10` on both containers + vLLM retry loo
 
 **KV Cache:** 25.77 GiB per node, 256K max context, ~51GB total across TP=2
 
+## Qwen3.5-122B-A10B-FP8 (Feb 2026)
+
+**Status:** RUNNING on vLLM TP=2, spark-2 + spark-3.
+**Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:qwen3_5-cu130`
+**Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.102.11:8000/v1/chat/completions`
+
+**Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
+**MoE:** `VLLM_TEST_FORCE_FP8_MARLIN=1` — CUTLASS crashes on sm_121a.
+**Memory:** 59.1 GiB/node, 0.70 util, FP8 KV. **TTFT:** ~6s. **Load:** ~80s worker, ~474s head.
+**Multimodal:** Images enabled (`--limit-mm-per-prompt '{"video": 0}'`). Video disabled.
+**Encoder cache:** 128K tokens via `VLLM_ENCODER_CACHE_TOKENS=131072` + `vllm_scheduler_patched.py`.
+**NVFP4 broken:** `alpertor/Qwen3.5-122B-A10B-NVFP4` produces garbage (missing E2M1 PTX).
+
+**Image benchmark (img_tok/s, 128K encoder cache, 0.70 util):**
+
+| Resolution | c=1 | c=8 | c=16 | c=32 |
+|-----------|------|------|-------|-------|
+| 256×256 | 108 | 94 | 355 | 541 |
+| 512×512 | 161 | 333 | 443 | 575 |
+| 1024×1024 | 193 | 399 | 603 | **910** |
+| 2048×2048 | 128 | crash | crash | crash |
+
+Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
+
 ## Qwen3.5-397B-A17B llama.cpp Deployment (Feb 2026)
 
 **Status:** RUNNING. Q2_K via llama.cpp RPC across spark-2 + spark-3.
