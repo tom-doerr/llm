@@ -509,6 +509,14 @@ Two layers: Docker `--restart=on-failure:10` on both containers + vLLM retry loo
 
 Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 
+## Qwen3.5-35B-A3B-FP8 (Feb 2026)
+
+**Status:** RUNNING on spark-2 single-node, port 8001.
+**Model:** `Qwen/Qwen3.5-35B-A3B-FP8` (35B total, 3B active per token)
+**Script:** `./start-vllm-fast.sh` | **API:** `http://192.168.102.11:8001/v1`
+**Memory:** 34.71 GiB, 0.50 util. Runs alongside 122B on port 8000.
+**Config fix:** `rope_theta: 10000000` added (same bug as 122B).
+
 ## Qwen3.5-397B-A17B llama.cpp Deployment (Feb 2026)
 
 **Status:** RUNNING. Q2_K via llama.cpp RPC across spark-2 + spark-3.
