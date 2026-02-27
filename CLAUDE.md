@@ -496,6 +496,7 @@ Two layers: Docker `--restart=on-failure:10` on both containers + vLLM retry loo
 **Memory:** 59.1 GiB/node, 0.70 util, FP8 KV. **TTFT:** ~6s. **Load:** ~80s worker, ~474s head.
 **Multimodal:** Images enabled (`--limit-mm-per-prompt '{"video": 0}'`). Video disabled.
 **Encoder cache:** 128K tokens via `VLLM_ENCODER_CACHE_TOKENS=131072` + `vllm_scheduler_patched.py`.
+**Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning_content` field. Per-request toggle via `extra_body={"chat_template_kwargs":{"enable_thinking": false}}`.
 **NVFP4 broken:** `alpertor/Qwen3.5-122B-A10B-NVFP4` produces garbage (missing E2M1 PTX).
 
 **Image benchmark (img_tok/s, 128K encoder cache, 0.70 util):**
@@ -562,10 +563,12 @@ BGE embeddings running alongside vLLM worker on spark-3.
 vLLM GGUF had GemmaRMSNorm + MXFP4 nibble bugs → garbage output.
 Chat template includes `<think>` block (thinking model).
 
-**Instruct:** Direct answers, 15-25% faster, no `<think>` tags.
-**Thinking:** Always reasons in `<think>` blocks, +11% math accuracy, slower. Thinking content appears inline in message content (not in `reasoning_content` field).
-
-**Thinking budget:** `thinking_budget=N` limits reasoning tokens (not yet in vLLM).
+**Qwen3.5 thinking (Feb 2026):** Controlled via `enable_thinking` parameter (not `/think`/`/no_think` like Qwen3).
+- **Default ON:** Model generates `<think>...</think>` before responding.
+- **Per-request toggle:** `extra_body={"chat_template_kwargs":{"enable_thinking": false}}`
+- **vLLM `--reasoning-parser qwen3`:** Separates thinking into `reasoning_content` field. Without it, thinking is inline in `content`.
+- **Recommended temps:** 0.6 (thinking), 0.7 (non-thinking). TopP=0.95, TopK=20.
+- **Multi-turn:** Chat template auto-strips thinking from history.
 
 ## Model Loading on Spark (Slow mmap Issue)
 

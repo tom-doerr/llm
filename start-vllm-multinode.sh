@@ -83,6 +83,7 @@ VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 4096"
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"
 VLLM_ARGS="$VLLM_ARGS --enforce-eager"
 VLLM_ARGS="$VLLM_ARGS --limit-mm-per-prompt '{\"video\": 0}'"
+VLLM_ARGS="$VLLM_ARGS --reasoning-parser qwen3"
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
 echo "#!/bin/bash" > /home/tom/llm/vllm-serve-cmd.sh
