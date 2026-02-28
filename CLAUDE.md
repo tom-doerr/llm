@@ -177,6 +177,13 @@ Interface `enP7s7` on both machines.
 | spark-1 ↔ spark-3 | spark-1 port 1, spark-3 port 0 | 192.168.120.0/24 (.1/.3) | 192.168.121.0/24 (.1/.3) |
 | spark-2 ↔ spark-3 | port 1 | 192.168.100.0/24 (.10/.11) | 192.168.101.0/24 (.10/.11) |
 
+**Cross-subnet host routes (NOT persistent, re-add after reboot):**
+- spark-3: `ip route add 192.168.110.1/32 via 192.168.120.1 dev enp1s0f0np0`
+- spark-3: `ip route add 192.168.110.0/24 via 192.168.100.10 dev enp1s0f1np1`
+- spark-1: `ip route add 192.168.100.11/32 via 192.168.120.3 dev enp1s0f1np1`
+
+**`/etc/hosts`:** spark-1→(110.2,120.3), spark-2→(110.1,100.11), spark-3→(120.1,100.10)
+
 ## Multi-Node Inference (Qwen3-VL-235B-AWQ)
 
 ### SGLang Multi-Node TP=2 (Jan 2026)
@@ -440,7 +447,7 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Watchdog:** `vllm-watchdog.sh` — test request every 5 min, restart after 2 failures.
 
-**spark-2 crash on inference (Feb 2026):** Crashes minutes into inference. Root cause: **no swap after reboot**. `/swap.img` (256GB) in fstab and `systemd-zram-generator` installed but neither activates. 119GB RAM, ~97GB vLLM → kernel OOM on any spike. Fix: `sudo swapon /swap.img` + create `/etc/systemd/zram-generator.conf` (copy from spark-1). spark-1 has 200GB zram + 256GB NVMe swap and doesn't crash.
+**spark-2 crash on inference (Feb 2026):** Hard crash (machine goes offline) minutes into serving inference. Crashes even with 256GB swap enabled. Not OOM — likely NVIDIA driver/kernel panic under compute load. Swap was missing after reboot (`sudo swapon /swap.img`) but enabling it didn't fix the crash. Root cause still unknown — check `journalctl -b -1` and `dmesg` after next crash.
 
 ### Head vs Worker Clock Speeds
 
@@ -536,10 +543,11 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 
 ## Qwen3.5-397B-A17B-NVFP4 (Feb 2026)
 
-**Model:** `nvidia/Qwen3.5-397B-A17B-NVFP4` (~224 GB). Downloaded on spark-2 (6/6 shards).
+**Model:** `nvidia/Qwen3.5-397B-A17B-NVFP4` (~224 GB). On all 3 sparks.
+**Script:** `./start-vllm-pp3.sh` | **Container:** `vllm/vllm-openai:qwen3_5-cu130`
 **Env:** `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`
-**Plan:** PP=3 across spark-1/2/3. spark-1 gets fewer layers (other workloads). 10GbE spark-1↔spark-2 is bottleneck but PP only sends activations (tolerable).
-**Status:** Not yet deployed. Need model on spark-1 and spark-3.
+**Topology:** spark-2 (head) + spark-1 (worker1) + spark-3 (worker2), PP=3
+**Status:** Deploying. Cross-subnet routes required (see QSFP section).
 
 ## Qwen3.5-397B-A17B llama.cpp Deployment (Feb 2026)
 

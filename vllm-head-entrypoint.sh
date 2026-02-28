@@ -2,15 +2,17 @@
 # Head node entrypoint: Ray head + vLLM serve with retry loop
 set -u
 
+EXPECTED_GPUS="${EXPECTED_GPUS:-2}"
+
 echo "=== Starting Ray head ==="
 ray start --head --port=6379 --node-ip-address="$VLLM_HOST_IP"
 
 gpu_count() { ray status 2>/dev/null | grep -oP '[\d.]+/[\d.]+\s+GPU' | head -1 | grep -oP '(?<=/)[\d.]+' | cut -d. -f1 || echo 0; }
 
-echo "=== Waiting for worker node with GPU to join ==="
+echo "=== Waiting for $EXPECTED_GPUS GPUs ==="
 for i in $(seq 1 120); do
     TOTAL_GPUS=$(gpu_count)
-    if [ "${TOTAL_GPUS:-0}" -ge 2 ]; then
+    if [ "${TOTAL_GPUS:-0}" -ge "$EXPECTED_GPUS" ]; then
         echo "Worker joined (${TOTAL_GPUS} GPUs available)."
         break
     fi
@@ -31,11 +33,11 @@ while [ "$RETRY" -lt "$MAX_RETRIES" ]; do
 
     # Wait for worker GPU if it disconnected
     TOTAL_GPUS=$(gpu_count)
-    if [ "${TOTAL_GPUS:-0}" -lt 2 ]; then
+    if [ "${TOTAL_GPUS:-0}" -lt "$EXPECTED_GPUS" ]; then
         echo "Worker GPU lost (${TOTAL_GPUS} GPUs). Waiting for reconnect..."
         for j in $(seq 1 120); do
             TOTAL_GPUS=$(gpu_count)
-            [ "${TOTAL_GPUS:-0}" -ge 2 ] && break
+            [ "${TOTAL_GPUS:-0}" -ge "$EXPECTED_GPUS" ] && break
             sleep 2
         done
         [ "${TOTAL_GPUS:-0}" -lt 2 ] && { echo "ERROR: Worker gone (${TOTAL_GPUS} GPUs)"; exit 1; }
