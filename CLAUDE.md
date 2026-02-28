@@ -425,6 +425,13 @@ Multi-node TP causes **~96% GPU util even when idle** due to NCCL busy-polling.
 Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 **No fix** - accept power cost or stop vLLM when not in use.
 
+### NCCL Idle Crash Fix (Feb 2026)
+
+**Problem:** NCCL watchdog kills idle workers after 600s → engine crash.
+**Fix:** `TORCH_NCCL_ENABLE_MONITORING=0` + `TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200`.
+**Note:** `TORCH_*` vars NOT copied by vLLM `ray_env.py`. Set via `docker -e`.
+**Also:** `VLLM_SLEEP_WHEN_IDLE=0` — stale connections prevent wake-up.
+
 ### Head vs Worker Clock Speeds
 
 Worker (spark-3) runs higher clocks: ~2400 MHz, 85W (pure tensor compute).
