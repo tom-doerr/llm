@@ -20,7 +20,7 @@ done
 
 echo "=== Starting vLLM (restarts on failure) ==="
 RETRY=0
-MAX_RETRIES=10
+MAX_RETRIES=3
 while [ "$RETRY" -lt "$MAX_RETRIES" ]; do
     VLLM_ATTENTION_BACKEND=TRITON_ATTN \
         RAY_ADDRESS="${VLLM_HOST_IP}:6379" \

@@ -425,12 +425,15 @@ Multi-node TP causes **~96% GPU util even when idle** due to NCCL busy-polling.
 Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 **No fix** - accept power cost or stop vLLM when not in use.
 
-### NCCL Idle Crash Fix (Feb 2026)
+### Stability Issues (Feb 2026)
 
-**Problem:** NCCL watchdog kills idle workers after 600s → engine crash.
-**Fix:** `TORCH_NCCL_ENABLE_MONITORING=0` + `TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200`.
-**Note:** `TORCH_*` vars NOT copied by vLLM `ray_env.py`. Set via `docker -e`.
-**Also:** `VLLM_SLEEP_WHEN_IDLE=0` — stale connections prevent wake-up.
+**Compiled DAG deadlock:** Stale client requests cause EngineCore + RayWorkerWrapper to spin at high CPU with 0 throughput. APIServer stays alive but chat returns empty.
+
+**Docker restart crash:** `--restart=on-failure` + entrypoint retries = rapid GPU alloc cycling crashes spark-2. **Fix:** `--restart=no`, entrypoint MAX_RETRIES=3.
+
+**Idle fixes:** `TORCH_NCCL_ENABLE_MONITORING=0`, `RAY_CGRAPH_get_timeout=86400`, `VLLM_SLEEP_WHEN_IDLE=0`.
+
+**Watchdog:** `vllm-watchdog.sh` — test request every 5 min, restart after 2 failures.
 
 ### Head vs Worker Clock Speeds
 
@@ -470,13 +473,11 @@ budget with WAITING request prefills. No artificial serialization.
 
 Both modes work. Heavy prefill queues can make throughput appear zero initially - wait for ramp-up.
 
-### Auto-Restart on Failure (Feb 2026)
+### Recovery (Feb 2026)
 
-Two layers: Docker `--restart=on-failure:10` on both containers + vLLM retry loop (10 retries, 15s delay) in head entrypoint.
-
-**Entrypoints:** `vllm-head-entrypoint.sh` (Ray head + vLLM retry loop), `vllm-worker-entrypoint.sh` (Ray worker with retry-connect loop)
-
-**Recovery:** vLLM crash → head retries vLLM. Container crash → Docker restarts → worker retries Ray join → head waits for worker → vLLM starts.
+Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entrypoint retries vLLM 3 times.
+**Watchdog** (`vllm-watchdog.sh`) handles recovery: test request every 5 min, redeploy after 2 failures.
+**Entrypoints:** `vllm-head-entrypoint.sh` (Ray head + vLLM retry), `vllm-worker-entrypoint.sh` (Ray worker with retry-connect).
 
 ## Model Cache (Jan 2026)
 
@@ -503,7 +504,8 @@ Two layers: Docker `--restart=on-failure:10` on both containers + vLLM retry loo
 **Memory:** 59.1 GiB/node, 0.70 util, FP8 KV. **TTFT:** ~6s. **Load:** ~80s worker, ~474s head.
 **Multimodal:** Images enabled (`--limit-mm-per-prompt '{"video": 0}'`). Video disabled.
 **Encoder cache:** 128K tokens via `VLLM_ENCODER_CACHE_TOKENS=131072` + `vllm_scheduler_patched.py`.
-**Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning_content` field. Per-request toggle via `extra_body={"chat_template_kwargs":{"enable_thinking": false}}`.
+**Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
+**qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 broken:** `alpertor/Qwen3.5-122B-A10B-NVFP4` produces garbage (missing E2M1 PTX).
 
 **Image benchmark (img_tok/s, 128K encoder cache, 0.70 util):**

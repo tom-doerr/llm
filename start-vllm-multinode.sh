@@ -47,23 +47,24 @@ VOLS="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS="$VOLS -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
 VOLS="$VOLS -v /tmp/vllm-head-ep.sh:/entrypoint.sh:ro"
 VOLS="$VOLS -v /tmp/vllm-serve-cmd.sh:/vllm-serve-cmd.sh:ro"
-VOLS="$VOLS -v /tmp/qwen3_5.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_5.py:ro"
+# qwen3_5.py: use container's built-in version (imports transformers inline, not from transformers.models.qwen3_5)
 VOLS="$VOLS -v /tmp/vllm_scheduler_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/config/scheduler.py:ro"
 VOLS_WORKER="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS_WORKER="$VOLS_WORKER -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
 VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm-worker-ep.sh:/entrypoint.sh:ro"
-VOLS_WORKER="$VOLS_WORKER -v /tmp/qwen3_5.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_5.py:ro"
+# qwen3_5.py: use container's built-in version
 VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm_scheduler_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/config/scheduler.py:ro"
+
+echo "=== Cleanup ==="
+ssh spark-2 "docker rm -f vllm-head 2>/dev/null; for f in /tmp/vllm-head-ep.sh /tmp/vllm-serve-cmd.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
+ssh spark-3 "docker rm -f vllm-worker 2>/dev/null; for f in /tmp/vllm-worker-ep.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
 
 echo "=== Deploying entrypoint scripts ==="
 scp -q /home/tom/llm/vllm-head-entrypoint.sh spark-2:/tmp/vllm-head-ep.sh
 scp -q /home/tom/llm/vllm-worker-entrypoint.sh spark-3:/tmp/vllm-worker-ep.sh
 scp -q /home/tom/llm/vllm_scheduler_patched.py spark-2:/tmp/vllm_scheduler_patched.py
 scp -q /home/tom/llm/vllm_scheduler_patched.py spark-3:/tmp/vllm_scheduler_patched.py
-
-echo "=== Cleanup ==="
-ssh spark-2 "docker rm -f vllm-head 2>/dev/null || true"
-ssh spark-3 "docker rm -f vllm-worker 2>/dev/null || true"
+# qwen3_5.py: using container's built-in version
 
 # echo "=== Drop caches ==="
 # ssh spark-2 "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'"
@@ -95,15 +96,15 @@ ENV_WORKER="$ENV_WORKER -e RAY_HEAD_IP=$HEAD_IP"
 
 echo "=== Starting worker on spark-3 ==="
 ssh spark-3 "docker run -d --name vllm-worker --gpus all --shm-size 16g \\
-    --network host --ipc host --restart=on-failure:10 --entrypoint bash \\
+    --network host --ipc host --restart=no --entrypoint bash \\
     $RDMA $ENV_WORKER $VOLS_WORKER $CONTAINER /entrypoint.sh"
 
 echo "=== Starting head on spark-2 ==="
 ssh spark-2 "docker run -d --name vllm-head --gpus all --shm-size 16g \\
-    --network host --ipc host --restart=on-failure:10 --entrypoint bash \\
+    --network host --ipc host --restart=no --entrypoint bash \\
     $RDMA $ENV_HEAD $VOLS $CONTAINER /entrypoint.sh"
 
-echo "=== Containers started (auto-restart on failure) ==="
+echo "=== Containers started ==="
 echo "Head logs:   ssh spark-2 'docker logs -f vllm-head'"
 echo "Worker logs: ssh spark-3 'docker logs -f vllm-worker'"
 echo "API:         http://192.168.102.11:8000/v1/chat/completions"
