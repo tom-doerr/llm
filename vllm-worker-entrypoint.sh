@@ -7,7 +7,8 @@ HEAD_ADDR="${RAY_HEAD_IP}:6379"
 echo "=== Waiting for Ray head at $HEAD_ADDR ==="
 for i in $(seq 1 120); do
     if ray start --address="$HEAD_ADDR" \
-        --node-ip-address="$VLLM_HOST_IP" --block; then
+        --node-ip-address="$VLLM_HOST_IP" \
+        --object-store-memory=2000000000 --block; then
         echo "Ray worker exited cleanly."
         exit 0
     fi
