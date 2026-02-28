@@ -23,9 +23,9 @@ async def run_benchmark(url, model, prompt, max_tokens, num_requests, concurrenc
     async with aiohttp.ClientSession(timeout=timeout) as session:
         return await asyncio.gather(*[bounded_request(session) for _ in range(num_requests)])
 
-URL = "http://192.168.102.11:8000/v1/chat/completions"
-BASE_URL = "http://192.168.102.11:8000"
-MODEL = "Qwen/Qwen3.5-122B-A10B-FP8"
+BASE_URL = os.environ.get("VLLM_BASE_URL", "http://192.168.110.2:8000")
+URL = f"{BASE_URL}/v1/chat/completions"
+MODEL = os.environ.get("VLLM_MODEL", "cyankiwi/Qwen3.5-122B-A10B-AWQ-4bit")
 RESULTS_DIR = os.path.expanduser("~/llm/benchmark_results")
 WORDS = ["the","be","to","of","and","a","in","that","have","it","for","not","on",
     "with","as","you","do","at","this","but","by","from","they","we","say","or"]

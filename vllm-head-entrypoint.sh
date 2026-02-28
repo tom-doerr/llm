@@ -4,6 +4,10 @@ set -u
 
 EXPECTED_GPUS="${EXPECTED_GPUS:-2}"
 
+# Prevent Ray from overwriting per-node NCCL/GLOO settings
+mkdir -p /root/.config/vllm
+echo '["NCCL_SOCKET_IFNAME","NCCL_IB_HCA","GLOO_SOCKET_IFNAME"]' > /root/.config/vllm/ray_non_carry_over_env_vars.json
+
 echo "=== Starting Ray head ==="
 ray start --head --port=6379 --node-ip-address="$VLLM_HOST_IP"
 

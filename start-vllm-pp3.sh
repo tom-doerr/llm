@@ -15,11 +15,10 @@ HEAD_IP="192.168.110.2"
 WORKER1_IP="192.168.110.1"
 WORKER2_IP="192.168.100.11"
 
-# Common env: NCCL IB with GDR disabled, Marlin for NVFP4
-ENV="-e NCCL_NET_PLUGIN=none -e NCCL_DMABUF_ENABLE=0"
-ENV="$ENV -e NCCL_NET_GDR_LEVEL=LOC -e NCCL_NET_GDR_C2C=0"
-ENV="$ENV -e NCCL_SOCKET_IFNAME=enp1s0f0np0,enp1s0f1np1"
-ENV="$ENV -e GLOO_SOCKET_IFNAME=enp1s0f0np0,enp1s0f1np1"
+# Common env: NCCL Socket (IB can't do cross-cable QPs in triangle topology)
+ENV="-e NCCL_NET=Socket -e NCCL_DMABUF_ENABLE=0"
+# NCCL_SOCKET_IFNAME set per-node below (must match reachable subnet)
+# GLOO_SOCKET_IFNAME set per-node below (must match reachable subnet)
 ENV="$ENV -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
 ENV="$ENV -e VLLM_SLEEP_WHEN_IDLE=0"
@@ -38,13 +37,13 @@ if [ "$DEBUG_NCCL" = "1" ]; then
   echo "NCCL debug enabled"
 fi
 
-# Per-node IB HCAs
+# Per-node socket interfaces (each node advertises its reachable IP)
 ENV_HEAD="$ENV -e VLLM_HOST_IP=$HEAD_IP -e EXPECTED_GPUS=3"
-ENV_HEAD="$ENV_HEAD -e NCCL_IB_HCA='=rocep1s0f0:1,roceP2p1s0f0:1,rocep1s0f1:1,roceP2p1s0f1:1'"
+ENV_HEAD="$ENV_HEAD -e GLOO_SOCKET_IFNAME=enp1s0f0np0 -e NCCL_SOCKET_IFNAME=enp1s0f0np0"
 ENV_W1="$ENV -e VLLM_HOST_IP=$WORKER1_IP"
-ENV_W1="$ENV_W1 -e NCCL_IB_HCA='=rocep1s0f0:1,roceP2p1s0f0:1'"
+ENV_W1="$ENV_W1 -e GLOO_SOCKET_IFNAME=enp1s0f0np0 -e NCCL_SOCKET_IFNAME=enp1s0f0np0"
 ENV_W2="$ENV -e VLLM_HOST_IP=$WORKER2_IP"
-ENV_W2="$ENV_W2 -e NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'"
+ENV_W2="$ENV_W2 -e GLOO_SOCKET_IFNAME=enp1s0f1np1 -e NCCL_SOCKET_IFNAME=enp1s0f1np1"
 
 RDMA="--device=/dev/infiniband --ulimit memlock=-1 --cap-add=IPC_LOCK"
 
@@ -69,7 +68,7 @@ echo "=== Building vLLM args ==="
 echo "Mode: Pipeline Parallel (PP=3)"
 VLLM_ARGS="--pipeline-parallel-size 3 --trust-remote-code"
 VLLM_ARGS="$VLLM_ARGS --quantization modelopt_fp4"
-VLLM_ARGS="$VLLM_ARGS --gpu-memory-utilization 0.85"
+VLLM_ARGS="$VLLM_ARGS --gpu-memory-utilization 0.45"
 VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 4096"
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"

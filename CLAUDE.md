@@ -154,19 +154,6 @@ docker run ... \
 
 **Config:** `/etc/netplan/40-cx7.yaml` on both machines (persistent)
 
-## 10GbE Link: spark-1 ↔ spark-2
-
-Interface `enP7s7` on both machines.
-
-| Host | IPv4 | IPv6 link-local |
-|------|------|-----------------|
-| spark-1 | 192.168.102.10/24 | fe80::55d3:2800:283f:4655%enP7s7 |
-| spark-2 | 192.168.102.11/24 | fe80::4b2e:d2df:bb09:5f59%enP7s7 |
-
-**Config:** `/etc/netplan/50-10gbe.yaml` on spark-2 (persistent)
-
-**Tested:** ~1 GB/s rsync throughput (Jan 2026)
-
 ## 200G QSFP Links: All-to-All (Feb 2026)
 
 3 Sparks connected all-to-all via QSFP DAC cables. Config: `/etc/netplan/40-cx7.yaml`.
@@ -384,10 +371,10 @@ Multimodal (random-mm, synthetic images):
 
 **Port:** 8000 (default). Use same port for vLLM/SGLang for consistent client code.
 
-**Access from spark-1:** Use 10GbE IP `192.168.102.11:8000` (200G IPs only work between spark-2/spark-3)
+**Access from spark-1:** Use QSFP IP `192.168.110.2:8000` (spark-1↔spark-2 link)
 ```bash
-curl http://192.168.102.11:8000/v1/chat/completions -H "Content-Type: application/json" \
-  -d '{"model":"QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ","messages":[{"role":"user","content":"Hi"}],"max_tokens":64}'
+curl http://192.168.110.2:8000/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"<model-name>","messages":[{"role":"user","content":"Hi"}],"max_tokens":64}'
 ```
 
 **Deps:** `pip install qwen-vl-utils==0.0.14` (required for Qwen-VL)
@@ -495,9 +482,9 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 
 ## Model Cache (Jan 2026)
 
-**spark-2** (~700GB): AWQ Instruct/Thinking (116+117G), NVFP4 variants (127G each), BF16 Thinking (214G)
+**spark-2** (~700GB): AWQ Instruct/Thinking (116+117G), NVFP4 variants (127G each), BF16 Thinking (214G), Qwen3.5-122B-A10B: FP8 (119G), AWQ-4bit (75G), NVFP4 (71G)
 
-**spark-3**: AWQ Instruct + Thinking (116+117G)
+**spark-3**: AWQ Instruct + Thinking (116+117G), Qwen3.5-122B-A10B: FP8 (119G), AWQ-4bit (75G), NVFP4 (71G)
 
 **SSH:** spark-2 ↔ spark-3 keys configured.
 
@@ -507,11 +494,29 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 
 **KV Cache:** 25.77 GiB per node, 256K max context, ~51GB total across TP=2
 
-## Qwen3.5-122B-A10B-FP8 (Feb 2026)
+## Qwen3.5-122B-A10B-AWQ-4bit (Feb 2026)
 
 **Status:** RUNNING on vLLM TP=2, spark-2 + spark-3.
+**Model:** `cyankiwi/Qwen3.5-122B-A10B-AWQ-4bit` | **Quant:** compressed-tensors
+**Script:** `MODEL=cyankiwi/Qwen3.5-122B-A10B-AWQ-4bit ./start-vllm-multinode.sh`
+**API:** `http://192.168.110.2:8000/v1/chat/completions`
+**Config fix:** `rope_theta: 10000000` in `text_config`.
+
+**Benchmark (Feb 2026 - TP=2, enforce-eager, QSFP):**
+
+| Concurrency | dec/s | p50 |
+|-------------|-------|-----|
+| 1 | 20.7 | 1.54s |
+| 64 | 460.9 | 4.43s |
+| 256 | **492.6** | 12.37s |
+
+Peak: **493 dec tok/s** at c=256.
+
+## Qwen3.5-122B-A10B-FP8 (Feb 2026)
+
+**Status:** NOT running (replaced by AWQ variant).
 **Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:qwen3_5-cu130`
-**Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.102.11:8000/v1/chat/completions`
+**Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.110.2:8000/v1`
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** `VLLM_TEST_FORCE_FP8_MARLIN=1` — CUTLASS crashes on sm_121a.
@@ -537,7 +542,7 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 
 **Status:** RUNNING on spark-2 single-node, port 8001.
 **Model:** `Qwen/Qwen3.5-35B-A3B-FP8` (35B total, 3B active per token)
-**Script:** `./start-vllm-fast.sh` | **API:** `http://192.168.102.11:8001/v1`
+**Script:** `./start-vllm-fast.sh` | **API:** `http://192.168.110.2:8001/v1`
 **Memory:** 34.71 GiB, 0.50 util. Runs alongside 122B on port 8000.
 **Config fix:** `rope_theta: 10000000` added (same bug as 122B).
 
@@ -547,7 +552,7 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 **Script:** `./start-vllm-pp3.sh` | **Container:** `vllm/vllm-openai:qwen3_5-cu130`
 **Env:** `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`
 **Topology:** spark-2 (head) + spark-1 (worker1) + spark-3 (worker2), PP=3
-**Status:** Deploying. Cross-subnet routes required (see QSFP section).
+**Status:** ABANDONED. spark-1 only has ~58 GB free (needs ~75 GB/stage). NCCL IB cross-cable QPs also fail in triangle topology (use NCCL_NET=Socket for PP).
 
 ## Qwen3.5-397B-A17B llama.cpp Deployment (Feb 2026)
 
@@ -557,7 +562,7 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 **Env vars:** `NP=16` (parallel slots), `CTX_SIZE=` (auto-fit), `MMPROJ=<path>` (vision)
 **Containers:** `llamacpp-head` (spark-2), `llamacpp-rpc` (spark-3)
 **Image:** NGC vllm:26.01-py3 base + mounted `~/llama.cpp/build/bin/`
-**API:** `http://192.168.102.11:8000/v1/chat/completions`
+**API:** `http://192.168.110.2:8000/v1/chat/completions`
 **Open WebUI:** http://localhost:7070 (model auto-discovered via OpenAI API)
 **Metrics:** `--metrics` flag, Prometheus scrapes `:8000/metrics` (`llamacpp:` prefix)
 **Build:** `CMAKE_CUDA_ARCHITECTURES=native` → sm_121a (GB10)
@@ -588,7 +593,7 @@ BGE embeddings running alongside vLLM worker on spark-3.
 
 ## Instruct vs Thinking Variants
 
-**Current (Feb 2026):** Thinking variant (`QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ`)
+**Current (Feb 2026):** `cyankiwi/Qwen3.5-122B-A10B-AWQ-4bit` on vLLM TP=2
 
 **Qwen3.5-397B-A17B (Feb 2026):** Q2_K GGUF via llama.cpp (working).
 vLLM GGUF had GemmaRMSNorm + MXFP4 nibble bugs → garbage output.
