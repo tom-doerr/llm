@@ -248,6 +248,8 @@ export UCX_NET_DEVICES=$MN_IF_NAME
 export RAY_memory_monitor_refresh_ms=0
 ```
 
+**Ray object store (CRITICAL on UMA):** Default ~30% of RAM (~36 GiB). With vLLM 0.70 GPU util, total ≈ 100% → crashes. Fix: `ray start --object-store-memory=2000000000` (2 GiB) in entrypoint.
+
 **Socket vs RoCE:** vLLM guide uses socket transport (~100 Gb/s). For full ~200 Gb/s, need NCCL NET/IB (RoCE) with IPs on BOTH halves of the port. GPUDirect unsupported but host-staged RoCE works.
 
 **Max throughput path:** TRT-LLM + NVFP4 (23,477 tok/s prefill, 11.73 tok/s decode). See [build.nvidia.com/spark/trt-llm/stacked-sparks](https://build.nvidia.com/spark/trt-llm/stacked-sparks)
@@ -426,15 +428,18 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 ### Stability Issues (Feb 2026)
 
-**Compiled DAG deadlock:** Stale client requests cause EngineCore + RayWorkerWrapper to spin at high CPU with 0 throughput. APIServer stays alive but chat returns empty.
+**Root cause (diagnosed):** Ray object store defaults to ~30% of system RAM (~36 GiB). With vLLM 0.70 GPU util (~84 GiB), total ≈ 100% of UMA. Head dies first (more overhead).
+**Fix:** `ray start --object-store-memory=2000000000` (2 GiB). Consider `VLLM_USE_V1=0` to avoid forced compiled DAG.
 
-**Docker restart crash:** `--restart=on-failure` + entrypoint retries = rapid GPU alloc cycling crashes spark-2. **Fix:** `--restart=no`, entrypoint MAX_RETRIES=3.
+**Compiled DAG deadlock:** Stale requests hang engine. vLLM V1 forces compiled DAG on.
 
-**Idle fixes:** `TORCH_NCCL_ENABLE_MONITORING=0`, `RAY_CGRAPH_get_timeout=86400`, `VLLM_SLEEP_WHEN_IDLE=0`.
+**Docker restart crash:** `--restart=no` (auto-restart caused crash loops).
 
 **Watchdog:** `vllm-watchdog.sh` — test request every 5 min, restart after 2 failures.
 
-**spark-2 crash on inference (Feb 2026):** Hard crash (machine goes offline) minutes into serving inference. Crashes even with 256GB swap enabled. Not OOM — likely NVIDIA driver/kernel panic under compute load. Swap was missing after reboot (`sudo swapon /swap.img`) but enabling it didn't fix the crash. Root cause still unknown — check `journalctl -b -1` and `dmesg` after next crash.
+**TP=2 instability:** Reported by multiple Spark users — one node drops, other GPU 100% forever. PP=2 or DP replicas may be more stable.
+
+**No swap on spark-2:** SwapTotal=0. Need zram/NVMe swap as safety valve for CPU-side pressure.
 
 ### Head vs Worker Clock Speeds
 
@@ -537,6 +542,11 @@ Peak: **493 dec tok/s** at c=256.
 | 2048×2048 | 128 | crash | crash | crash |
 
 Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
+
+## Qwen3.5-122B-A10B Intel AutoRound int4 (Feb 2026)
+
+**Model:** `Intel/Qwen3.5-122B-A10B-int4-AutoRound`
+**Status:** Downloading on spark-3. Community reports: ~28 tok/s single, ~41 tok/s dual decode (pp2048/tg32). Fastest int4 option on Spark.
 
 ## Qwen3.5-35B-A3B-FP8 (Feb 2026)
 
