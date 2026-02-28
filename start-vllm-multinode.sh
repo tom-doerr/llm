@@ -26,7 +26,7 @@ ENV="$ENV -e HF_HUB_OFFLINE=1"
 ENV="$ENV -e VLLM_SLEEP_WHEN_IDLE=0"  # Disabled: stale requests prevent wake-up, causing hung requests
 ENV="$ENV -e OMP_NUM_THREADS=1"  # Reduce threading overhead
 ENV="$ENV -e VLLM_USE_RAY_COMPILED_DAG=0"  # Disable compiled DAG
-ENV="$ENV -e RAY_CGRAPH_get_timeout=3600"  # 1hr compiled DAG timeout (prevents idle crash from stale requests)
+ENV="$ENV -e RAY_CGRAPH_get_timeout=86400"  # 24hr compiled DAG timeout (stale requests keep engine idle)
 ENV="$ENV -e TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200"  # 2hr NCCL heartbeat (default 600s kills idle workers)
 ENV="$ENV -e TORCH_NCCL_ENABLE_MONITORING=0"  # Disable NCCL watchdog (kills idle multi-node workers)
 ENV="$ENV -e VLLM_TEST_FORCE_FP8_MARLIN=1"  # Force Marlin MoE backend - CUTLASS crashes on sm_121a
