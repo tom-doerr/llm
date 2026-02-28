@@ -167,10 +167,15 @@ Interface `enP7s7` on both machines.
 
 **Tested:** ~1 GB/s rsync throughput (Jan 2026)
 
-## 200G QSFP Links: spark-1 ↔ spark-2 and spark-1 ↔ spark-3
+## 200G QSFP Links: All-to-All (Feb 2026)
 
-Both links UP at 200G but **no IPs assigned** (port 0: `enp1s0f0np0`).
-Needed for PP=3 Qwen3.5 deployment across all 3 Sparks.
+3 Sparks connected all-to-all via QSFP DAC cables. Config: `/etc/netplan/40-cx7.yaml`.
+
+| Link | Port | Subnet (half 1) | Subnet (half 2) |
+|------|------|-----------------|-----------------|
+| spark-1 ↔ spark-2 | port 0 | 192.168.110.0/24 (.1/.2) | 192.168.111.0/24 (.1/.2) |
+| spark-1 ↔ spark-3 | spark-1 port 1, spark-3 port 0 | 192.168.120.0/24 (.1/.3) | 192.168.121.0/24 (.1/.3) |
+| spark-2 ↔ spark-3 | port 1 | 192.168.100.0/24 (.10/.11) | 192.168.101.0/24 (.10/.11) |
 
 ## Multi-Node Inference (Qwen3-VL-235B-AWQ)
 
@@ -435,6 +440,8 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Watchdog:** `vllm-watchdog.sh` — test request every 5 min, restart after 2 failures.
 
+**spark-2 crash on inference (Feb 2026):** Crashes minutes into inference. Root cause: **no swap after reboot**. `/swap.img` (256GB) in fstab and `systemd-zram-generator` installed but neither activates. 119GB RAM, ~97GB vLLM → kernel OOM on any spike. Fix: `sudo swapon /swap.img` + create `/etc/systemd/zram-generator.conf` (copy from spark-1). spark-1 has 200GB zram + 256GB NVMe swap and doesn't crash.
+
 ### Head vs Worker Clock Speeds
 
 Worker (spark-3) runs higher clocks: ~2400 MHz, 85W (pure tensor compute).
@@ -506,7 +513,7 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 **Encoder cache:** 128K tokens via `VLLM_ENCODER_CACHE_TOKENS=131072` + `vllm_scheduler_patched.py`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
-**NVFP4 broken:** `alpertor/Qwen3.5-122B-A10B-NVFP4` produces garbage (missing E2M1 PTX).
+**NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
 
 **Image benchmark (img_tok/s, 128K encoder cache, 0.70 util):**
 
@@ -526,6 +533,13 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 **Script:** `./start-vllm-fast.sh` | **API:** `http://192.168.102.11:8001/v1`
 **Memory:** 34.71 GiB, 0.50 util. Runs alongside 122B on port 8000.
 **Config fix:** `rope_theta: 10000000` added (same bug as 122B).
+
+## Qwen3.5-397B-A17B-NVFP4 (Feb 2026)
+
+**Model:** `nvidia/Qwen3.5-397B-A17B-NVFP4` (~224 GB). Downloaded on spark-2 (6/6 shards).
+**Env:** `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`
+**Plan:** PP=3 across spark-1/2/3. spark-1 gets fewer layers (other workloads). 10GbE spark-1↔spark-2 is bottleneck but PP only sends activations (tolerable).
+**Status:** Not yet deployed. Need model on spark-1 and spark-3.
 
 ## Qwen3.5-397B-A17B llama.cpp Deployment (Feb 2026)
 
