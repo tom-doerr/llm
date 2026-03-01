@@ -428,14 +428,16 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 ### Stability Issues (Mar 2026)
 
-**Root cause:** Ray object store (30% default) + vLLM 0.70 GPU util ≈ 100% UMA.
+**Root cause (confirmed):** ConnectX-7 **GID table disruption**. Single ASIC, two ports. When port 0 link flaps (spark-1 reboot/boot), kernel removes/re-adds addresses → GID table shifts on shared ASIC → active RoCE QPs on port 1 (NCCL) reference stale GIDs → allgather hangs → 600s timeout → crash. Confirmed via spark-3 syslog: port 0 `carrier-changed` at 20:25:21 = throughput → 0.
 
-**Applied fixes:** object-store-memory=2G, --include-dashboard=false, RAY_CGRAPH_get_timeout=86400, single-rail NCCL, --max-num-seqs 32, NCCL watchdog off.
+**Fix (applied Mar 2026):** `ignore-carrier: true` in netplan on port 0 interfaces of spark-2 and spark-3. Prevents address removal on carrier loss → GID table stays stable. Optional extras: `NCCL_IB_GID_INDEX`, disable IPv6 on port 0, `NCCL_IB_TIMEOUT=22`.
 
-**Hard crash (Mar 2026):** spark-2 crashes reproducibly under CUDA load (even during model loading, not just inference). Not OOM. Suspected HW issue specific to spark-2 (power/thermal/driver). **Fix: swapped roles** — spark-3 is now head, spark-2 is worker.
+**Other fixes:** object-store-memory=2G, --include-dashboard=false, RAY_CGRAPH_get_timeout=3600, single-rail NCCL, --max-num-seqs 32, NCCL watchdog off, FP8 KV cache disabled.
 
-**Compiled DAG:** Stale clients (`sage`, `agent_daemon.py`) hang engine. V1 forces DAG on.
-**Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails).
+**Hard crash (Mar 2026):** spark-2 crashed 3x under CUDA load (model loading + inference). FP8 KV cache (`--kv-cache-dtype fp8`) suspected trigger — disabled for testing. Head moved back to spark-2 for Grafana compatibility.
+
+**Compiled DAG:** Stale clients hang engine. V1 forces DAG on. `RAY_CGRAPH_get_timeout=3600` (1hr fail-fast).
+**Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
 **No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
 
 ### Head vs Worker Clock Speeds
@@ -490,7 +492,7 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 
 **SSH:** spark-2 ↔ spark-3 keys configured.
 
-**Working (Jan 2026):** vLLM TP=2 with sitecustomize.py cuDNN disable + FP8 KV cache + HF_HUB_OFFLINE=1
+**Working (Jan 2026):** vLLM TP=2 with sitecustomize.py cuDNN disable + HF_HUB_OFFLINE=1. FP8 KV cache disabled (Mar 2026, suspected crash cause).
 
 **Model load:** ~3 min (42 shards) + ~5 min encoder profiling. **TTFT:** ~5s.
 
@@ -516,13 +518,13 @@ Peak: **493 dec tok/s** at c=256.
 
 ## Qwen3.5-122B-A10B-FP8 (Feb 2026)
 
-**Status:** RUNNING on vLLM TP=2, spark-3 (head) + spark-2 (worker).
+**Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker).
 **Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:qwen3_5-cu130`
-**Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.120.3:8000/v1`
+**Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.110.2:8000/v1`
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** `VLLM_TEST_FORCE_FP8_MARLIN=1` — CUTLASS crashes on sm_121a.
-**Memory:** 59.1 GiB/node, 0.70 util, FP8 KV. **TTFT:** ~6s. **Load:** ~80s worker, ~474s head.
+**Memory:** 59.1 GiB/node, 0.70 util, no FP8 KV (disabled — suspected crash cause). **TTFT:** ~6s.
 **Multimodal:** Images enabled (`--limit-mm-per-prompt '{"video": 0}'`). Video disabled.
 **Encoder cache:** 128K tokens via `VLLM_ENCODER_CACHE_TOKENS=131072` + `vllm_scheduler_patched.py`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
