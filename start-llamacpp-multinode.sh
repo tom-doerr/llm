@@ -23,7 +23,7 @@ CTX_ARG=""; [ -n "$CTX" ] && CTX_ARG="-c $CTX"
 ssh spark-2 "docker run -d --name llamacpp-head $RUN $VOLS \
     -e LD_LIBRARY_PATH=$LCPP --entrypoint $LCPP/llama-server \
     $IMG -m $MODEL $MP --rpc $WIP:$RPC \
-    -ngl 999 $CTX_ARG -np $NP --metrics --host 0.0.0.0 --port 8000"
+    -ngl 999 $CTX_ARG -np $NP --kv-unified --metrics --host 0.0.0.0 --port 8000"
 
 echo "=== Started ==="
 echo "API: http://192.168.102.11:8000/v1/chat/completions"

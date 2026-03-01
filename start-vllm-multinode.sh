@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start vLLM multi-node on spark-2 (head) + spark-3 (worker)
+# Start vLLM multi-node on spark-3 (head) + spark-2 (worker)
 # Usage: ./start-vllm-multinode.sh [--debug] [--pp]
 set -e
 
@@ -13,8 +13,8 @@ done
 MODEL="${MODEL:-Qwen/Qwen3.5-122B-A10B-FP8}"
 CONTAINER="${CONTAINER:-vllm/vllm-openai:qwen3_5-cu130}"
 OOB_IF="enp1s0f1np1"  # Control plane interface
-HEAD_IP="192.168.100.10"
-WORKER_IP="192.168.100.11"
+HEAD_IP="192.168.100.11"
+WORKER_IP="192.168.100.10"
 # NCCL IB with GDR disabled (host-staged RDMA for lower latency)
 ENV="-e NCCL_NET_PLUGIN=none -e NCCL_DMABUF_ENABLE=0"
 ENV="$ENV -e NCCL_NET_GDR_LEVEL=LOC -e NCCL_NET_GDR_C2C=0"
@@ -56,14 +56,14 @@ VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm-worker-ep.sh:/entrypoint.sh:ro"
 VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm_scheduler_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/config/scheduler.py:ro"
 
 echo "=== Cleanup ==="
-ssh spark-2 "docker rm -f vllm-head 2>/dev/null; for f in /tmp/vllm-head-ep.sh /tmp/vllm-serve-cmd.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
-ssh spark-3 "docker rm -f vllm-worker 2>/dev/null; for f in /tmp/vllm-worker-ep.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
+ssh spark-3 "docker rm -f vllm-head 2>/dev/null; for f in /tmp/vllm-head-ep.sh /tmp/vllm-serve-cmd.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
+ssh spark-2 "docker rm -f vllm-worker 2>/dev/null; for f in /tmp/vllm-worker-ep.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
 
 echo "=== Deploying entrypoint scripts ==="
-scp -q /home/tom/llm/vllm-head-entrypoint.sh spark-2:/tmp/vllm-head-ep.sh
-scp -q /home/tom/llm/vllm-worker-entrypoint.sh spark-3:/tmp/vllm-worker-ep.sh
-scp -q /home/tom/llm/vllm_scheduler_patched.py spark-2:/tmp/vllm_scheduler_patched.py
+scp -q /home/tom/llm/vllm-head-entrypoint.sh spark-3:/tmp/vllm-head-ep.sh
+scp -q /home/tom/llm/vllm-worker-entrypoint.sh spark-2:/tmp/vllm-worker-ep.sh
 scp -q /home/tom/llm/vllm_scheduler_patched.py spark-3:/tmp/vllm_scheduler_patched.py
+scp -q /home/tom/llm/vllm_scheduler_patched.py spark-2:/tmp/vllm_scheduler_patched.py
 # qwen3_5.py: using container's built-in version
 
 # echo "=== Drop caches ==="
@@ -85,26 +85,27 @@ VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8"
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 4096"
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"
 VLLM_ARGS="$VLLM_ARGS --enforce-eager"
+VLLM_ARGS="$VLLM_ARGS --max-num-seqs 32"
 VLLM_ARGS="$VLLM_ARGS --limit-mm-per-prompt '{\"video\": 0}'"
 VLLM_ARGS="$VLLM_ARGS --reasoning-parser qwen3"
 VLLM_ARGS="$VLLM_ARGS --host 0.0.0.0 --port 8000"
 
 echo "#!/bin/bash" > /home/tom/llm/vllm-serve-cmd.sh
 echo "exec vllm serve $MODEL $VLLM_ARGS" >> /home/tom/llm/vllm-serve-cmd.sh
-scp -q /home/tom/llm/vllm-serve-cmd.sh spark-2:/tmp/vllm-serve-cmd.sh
+scp -q /home/tom/llm/vllm-serve-cmd.sh spark-3:/tmp/vllm-serve-cmd.sh
 ENV_WORKER="$ENV_WORKER -e RAY_HEAD_IP=$HEAD_IP"
 
-echo "=== Starting worker on spark-3 ==="
-ssh spark-3 "docker run -d --name vllm-worker --gpus all --shm-size 16g \\
+echo "=== Starting worker on spark-2 ==="
+ssh spark-2 "docker run -d --name vllm-worker --gpus all --shm-size 16g \\
     --network host --ipc host --restart=no --entrypoint bash \\
     $RDMA $ENV_WORKER $VOLS_WORKER $CONTAINER /entrypoint.sh"
 
-echo "=== Starting head on spark-2 ==="
-ssh spark-2 "docker run -d --name vllm-head --gpus all --shm-size 16g \\
+echo "=== Starting head on spark-3 ==="
+ssh spark-3 "docker run -d --name vllm-head --gpus all --shm-size 16g \\
     --network host --ipc host --restart=no --entrypoint bash \\
     $RDMA $ENV_HEAD $VOLS $CONTAINER /entrypoint.sh"
 
 echo "=== Containers started ==="
-echo "Head logs:   ssh spark-2 'docker logs -f vllm-head'"
-echo "Worker logs: ssh spark-3 'docker logs -f vllm-worker'"
-echo "API:         http://192.168.102.11:8000/v1/chat/completions"
+echo "Head logs:   ssh spark-3 'docker logs -f vllm-head'"
+echo "Worker logs: ssh spark-2 'docker logs -f vllm-worker'"
+echo "API:         http://192.168.120.3:8000/v1/chat/completions"

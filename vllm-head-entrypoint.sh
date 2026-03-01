@@ -10,7 +10,7 @@ echo '["NCCL_SOCKET_IFNAME","NCCL_IB_HCA","GLOO_SOCKET_IFNAME"]' > /root/.config
 
 echo "=== Starting Ray head ==="
 ray start --head --port=6379 --node-ip-address="$VLLM_HOST_IP" \
-    --object-store-memory=2000000000
+    --object-store-memory=2000000000 --include-dashboard=false
 
 gpu_count() { ray status 2>/dev/null | grep -oP '[\d.]+/[\d.]+\s+GPU' | head -1 | grep -oP '(?<=/)[\d.]+' | cut -d. -f1 || echo 0; }
 

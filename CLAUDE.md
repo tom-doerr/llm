@@ -428,18 +428,15 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 ### Stability Issues (Feb 2026)
 
-**Root cause (diagnosed):** Ray object store defaults to ~30% of system RAM (~36 GiB). With vLLM 0.70 GPU util (~84 GiB), total ≈ 100% of UMA. Head dies first (more overhead).
-**Fix:** `ray start --object-store-memory=2000000000` (2 GiB). Consider `VLLM_USE_V1=0` to avoid forced compiled DAG.
+**Root cause:** Ray object store (30% default) + vLLM 0.70 GPU util ≈ 100% UMA.
 
-**Compiled DAG deadlock:** Stale requests hang engine. vLLM V1 forces compiled DAG on.
+**Applied fixes:** object-store-memory=2G, --include-dashboard=false, RAY_CGRAPH_get_timeout=86400, single-rail NCCL, --max-num-seqs 32, NCCL watchdog off.
 
-**Docker restart crash:** `--restart=no` (auto-restart caused crash loops).
+**Hard crash (Mar 2026):** spark-2 offline after ~1hr inference. Not OOM (22 GiB free). Suspected driver/kernel panic or power renegotiation. Community reports similar.
 
-**Watchdog:** `vllm-watchdog.sh` — test request every 5 min, restart after 2 failures.
-
-**TP=2 instability:** Reported by multiple Spark users — one node drops, other GPU 100% forever. PP=2 or DP replicas may be more stable.
-
-**No swap on spark-2:** SwapTotal=0. Need zram/NVMe swap as safety valve for CPU-side pressure.
+**Compiled DAG:** Stale clients (`sage`, `agent_daemon.py`) hang engine. V1 forces DAG on.
+**Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails).
+**No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
 
 ### Head vs Worker Clock Speeds
 
@@ -545,8 +542,10 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 
 ## Qwen3.5-122B-A10B Intel AutoRound int4 (Feb 2026)
 
-**Model:** `Intel/Qwen3.5-122B-A10B-int4-AutoRound`
-**Status:** Downloading on spark-3. Community reports: ~28 tok/s single, ~41 tok/s dual decode (pp2048/tg32). Fastest int4 option on Spark.
+**Model:** `Intel/Qwen3.5-122B-A10B-int4-AutoRound` (~67 GB)
+**Status:** Downloaded on spark-3. Needs rsync to spark-2 for TP=2.
+**Forum benchmarks:** FP8 dual: prefill 3763, decode 29.3 tok/s. AWQ dual: prefill 3021, decode 23.1. AWQ single: prefill 2112, decode 15.2.
+**Note:** INT4 fits single Spark (~67 GB) but user wants TP=2 for multimodal.
 
 ## Qwen3.5-35B-A3B-FP8 (Feb 2026)
 
