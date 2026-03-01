@@ -1,7 +1,7 @@
 #!/bin/bash
 # vLLM watchdog: send test request every 5 min, restart after 2 consecutive failures
 L=/tmp/vllm-watchdog.log
-API=http://192.168.102.11:8000/v1/chat/completions
+API=${VLLM_API_URL:-http://192.168.110.2:8000/v1/chat/completions}
 D='{"model":"Qwen/Qwen3.5-122B-A10B-FP8","messages":[{"role":"user","content":"1+1="}],"max_tokens":5}'
 f=0
 echo "$(date): watchdog start"|tee -a $L
