@@ -426,13 +426,13 @@ Multi-node TP causes **~96% GPU util even when idle** due to NCCL busy-polling.
 Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 **No fix** - accept power cost or stop vLLM when not in use.
 
-### Stability Issues (Feb 2026)
+### Stability Issues (Mar 2026)
 
 **Root cause:** Ray object store (30% default) + vLLM 0.70 GPU util ≈ 100% UMA.
 
 **Applied fixes:** object-store-memory=2G, --include-dashboard=false, RAY_CGRAPH_get_timeout=86400, single-rail NCCL, --max-num-seqs 32, NCCL watchdog off.
 
-**Hard crash (Mar 2026):** spark-2 offline after ~1hr inference. Not OOM (22 GiB free). Suspected driver/kernel panic or power renegotiation. Community reports similar.
+**Hard crash (Mar 2026):** spark-2 crashes reproducibly under CUDA load (even during model loading, not just inference). Not OOM. Suspected HW issue specific to spark-2 (power/thermal/driver). **Fix: swapped roles** — spark-3 is now head, spark-2 is worker.
 
 **Compiled DAG:** Stale clients (`sage`, `agent_daemon.py`) hang engine. V1 forces DAG on.
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails).
@@ -516,9 +516,9 @@ Peak: **493 dec tok/s** at c=256.
 
 ## Qwen3.5-122B-A10B-FP8 (Feb 2026)
 
-**Status:** NOT running (replaced by AWQ variant).
+**Status:** RUNNING on vLLM TP=2, spark-3 (head) + spark-2 (worker).
 **Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:qwen3_5-cu130`
-**Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.110.2:8000/v1`
+**Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.120.3:8000/v1`
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** `VLLM_TEST_FORCE_FP8_MARLIN=1` — CUTLASS crashes on sm_121a.
@@ -543,9 +543,8 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 ## Qwen3.5-122B-A10B Intel AutoRound int4 (Feb 2026)
 
 **Model:** `Intel/Qwen3.5-122B-A10B-int4-AutoRound` (~67 GB)
-**Status:** Downloaded on spark-3. Needs rsync to spark-2 for TP=2.
-**Forum benchmarks:** FP8 dual: prefill 3763, decode 29.3 tok/s. AWQ dual: prefill 3021, decode 23.1. AWQ single: prefill 2112, decode 15.2.
-**Note:** INT4 fits single Spark (~67 GB) but user wants TP=2 for multimodal.
+**Status:** BROKEN — MoE gate weights not loaded (skipped as "not found in params_dict"). Produces garbage output. vLLM `inc` backend incompatible with `auto_round:auto_gptq` packing. Needs newer vLLM or `auto_round` library.
+**Tokenizer fix:** `tokenizer_class` changed from `TokenizersBackend` to `Qwen2Tokenizer` (patched on both nodes).
 
 ## Qwen3.5-35B-A3B-FP8 (Feb 2026)
 
