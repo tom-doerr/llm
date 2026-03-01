@@ -25,10 +25,14 @@ ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
 ENV="$ENV -e VLLM_SLEEP_WHEN_IDLE=0"  # Disabled: stale requests prevent wake-up, causing hung requests
 ENV="$ENV -e OMP_NUM_THREADS=1"  # Reduce threading overhead
-ENV="$ENV -e VLLM_USE_RAY_COMPILED_DAG=0"  # Disable compiled DAG (V1 may force it on)
-ENV="$ENV -e RAY_CGRAPH_get_timeout=3600"  # 1hr compiled DAG timeout (fail fast, not hide hangs)
-ENV="$ENV -e TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200"  # 2hr NCCL heartbeat
-ENV="$ENV -e TORCH_NCCL_ENABLE_MONITORING=0"  # Disable NCCL watchdog (kills idle multi-node workers)
+ENV="$ENV -e RAY_CGRAPH_get_timeout=3600"  # 1hr compiled DAG timeout
+ENV="$ENV -e RAY_CGRAPH_submit_timeout=3600"  # 1hr submit timeout
+# PyTorch NCCL flight recorder (forensic data on stalls)
+ENV="$ENV -e TORCH_NCCL_TRACE_BUFFER_SIZE=2000"
+ENV="$ENV -e TORCH_NCCL_DUMP_ON_TIMEOUT=1"
+ENV="$ENV -e TORCH_NCCL_DESYNC_DEBUG=1"
+ENV="$ENV -e TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200"
+ENV="$ENV -e TORCH_NCCL_ENABLE_MONITORING=0"
 ENV="$ENV -e VLLM_TEST_FORCE_FP8_MARLIN=1"  # Force Marlin MoE backend - CUTLASS crashes on sm_121a
 ENV="$ENV -e VLLM_ENCODER_CACHE_TOKENS=131072"  # 128K encoder cache (~0.75 GiB), decoupled from max_num_batched_tokens
 # ENV="$ENV -e VLLM_NVFP4_GEMM_BACKEND=marlin"  # NVFP4-only, not needed for FP8
