@@ -436,7 +436,7 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Hard crash (Mar 2026):** spark-2 crashed 3x under CUDA load (model loading + inference). FP8 KV cache (`--kv-cache-dtype fp8`) suspected trigger — disabled for testing. Head moved back to spark-2 for Grafana compatibility.
 
-**Compiled DAG:** Stale clients hang engine. V1 forces DAG on. `RAY_CGRAPH_get_timeout=3600` (1hr fail-fast).
+**Compiled DAG deadlock:** V1 forces compiled DAG on (`VLLM_USE_RAY_COMPILED_DAG=0` is ignored in v0.16). Client disconnects (e.g. short curl timeouts) leave stale requests → engine hangs at 0 tok/s indefinitely. No NCCL error, no crash — just stuck. **Avoid short client timeouts** (use 300s+). `RAY_CGRAPH_get_timeout=3600` (1hr).
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
 **No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
 
