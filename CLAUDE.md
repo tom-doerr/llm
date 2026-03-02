@@ -554,11 +554,13 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 
 ## Qwen3.5-35B-A3B-FP8 (Feb 2026)
 
-**Status:** RUNNING on spark-2 single-node, port 8001.
+**Status:** RUNNING on spark-2 single-node, port 8000. Stability test (no Ray/compiled DAG).
 **Model:** `Qwen/Qwen3.5-35B-A3B-FP8` (35B total, 3B active per token)
-**Script:** `./start-vllm-fast.sh` | **API:** `http://192.168.110.2:8001/v1`
-**Memory:** 34.71 GiB, 0.50 util. Runs alongside 122B on port 8000.
+**Container:** `vllm/vllm-openai:cu130-nightly` (v0.16.1rc1.dev111)
+**Script:** `./start-vllm-fast.sh` | **API:** `http://192.168.110.2:8000/v1`
+**Memory:** 34.71 GiB, 0.85 util, KV cache 816K tokens (62.3 GiB).
 **Config fix:** `rope_theta: 10000000` added (same bug as 122B).
+**FLA warning:** First request slow (~30s warmup). `fla/ops/utils.py` shape mismatch warning — cosmetic.
 
 ## Qwen3.5-397B-A17B-NVFP4 (Feb 2026)
 
