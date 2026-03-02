@@ -1,0 +1,30 @@
+FROM vllm/vllm-openai:qwen3_5-cu130
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN python3 -m pip install --no-cache-dir -U \
+  "git+https://github.com/ggml-org/llama.cpp.git#subdirectory=gguf-py" \
+  "git+https://github.com/huggingface/transformers.git"
+COPY patch_*.py qwen35_gguf_map.py mxfp4_dequant.py /tmp/
+COPY mxfp4_dequant.py /usr/local/lib/python3.12/dist-packages/
+RUN python3 /tmp/patch_gguf.py \
+ && python3 /tmp/patch_gguf_arch.py \
+ && python3 /tmp/patch_gguf_tensors.py \
+ && python3 /tmp/patch_transformers_gguf.py \
+ && python3 /tmp/patch_transformers_config.py \
+ && python3 /tmp/patch_vllm_rope.py \
+ && python3 /tmp/patch_vllm_gguf_loader.py \
+ && python3 /tmp/patch_qwen35moe_module.py \
+ && python3 /tmp/patch_causal_lm_mapping.py \
+ && python3 /tmp/patch_vllm_config.py \
+ && python3 /tmp/patch_vllm_registry.py \
+ && python3 /tmp/patch_gguf_qwen35_map.py \
+ && python3 /tmp/patch_gguf_dequant_embed.py \
+ && python3 /tmp/patch_gguf_dequant_mxfp4.py \
+ && python3 /tmp/patch_gguf_dequant_mxfp4b.py \
+ && python3 /tmp/patch_linear_tuple_shardid.py \
+ && python3 /tmp/patch_qwen35_dim_fix.py \
+ && python3 /tmp/patch_mamba_conv1d_dim.py \
+ && python3 /tmp/patch_gguf_sharded.py \
+ && python3 /tmp/patch_gguf_sharded2.py \
+ && python3 /tmp/patch_gguf_sharded3.py \
+ && python3 /tmp/patch_gguf_sharded4.py \
+ && python3 /tmp/patch_debug_wtm.py
