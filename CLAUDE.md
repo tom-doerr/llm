@@ -436,12 +436,13 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Hard crash (Mar 2026):** spark-2 crashed 4+ times under CUDA load — full machine unresponsive (all interfaces down, requires physical power cycle). FP8 KV cache disabled but crashes continue. May be hardware/firmware issue specific to spark-2. Consider swapping head to spark-3.
 
-**Compiled DAG deadlock:** V1 forces compiled DAG on. Throughput drops to 0 with stuck request, NCCL watchdog kills worker after 600s. Happens regardless of QSFP cable state (confirmed with cables unplugged). Not cable/GID related — pure software issue. `RAY_CGRAPH_get_timeout=3600` (1hr). `RAY_CGRAPH_submit_timeout=3600`.
+**Compiled DAG deadlock:** V1 forces compiled DAG on. Worker crashes after ~40 min regardless of model size (tested with 35B and 122B). Not cable/GID related — pure software issue.
+**DAG channel fix (Mar 2026):** `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE=nccl` — forces NCCL transport instead of `auto` (shared memory unstable on aarch64/UMA). Testing stability.
 **NCCL flight recorder:** `TORCH_NCCL_TRACE_BUFFER_SIZE=2000`, `TORCH_NCCL_DUMP_ON_TIMEOUT=1`, `TORCH_NCCL_DESYNC_DEBUG=1` — forensic data on stalls.
 **mp backend NOT viable (Mar 2026):** SHM bug (#33628) on aarch64 multi-node — PR #34169 not merged. Must stay on Ray.
 **SGLang for FP8 (Mar 2026):** Not viable — CUTLASS FP8 broken on sm_121a, no Marlin workaround equivalent.
+**Health check caution:** Inference-based probes can create stale requests that trigger DAG wedges. Prefer metrics-gated checks (`/metrics`).
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
-**Monitor:** `vllm-monitor.sh` — hourly health check, auto-redeploys on failure. Now running on `cu130-nightly`.
 **No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
 
 ### Head vs Worker Clock Speeds
@@ -528,9 +529,9 @@ Peak: **493 dec tok/s** at c=256.
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** `VLLM_TEST_FORCE_FP8_MARLIN=1` — CUTLASS crashes on sm_121a.
-**Memory:** 59.1 GiB/node, 0.70 util, no FP8 KV (disabled — suspected crash cause). KV cache: 442K tokens (20.45 GiB).
+**Memory:** 59.1 GiB/node, 0.70 util, no FP8 KV (disabled). KV cache: 471K tokens (21.77 GiB/node).
 **Multimodal:** Images enabled (`--limit-mm-per-prompt '{"video": 0}'`). Video disabled.
-**Encoder cache:** 16K tokens (nightly default). Old `VLLM_ENCODER_CACHE_TOKENS` env var no longer read (scheduler patch removed for nightly compat).
+**Encoder cache:** 16K tokens (nightly default). `VLLM_ENCODER_CACHE_TOKENS` removed (nightly ignores it).
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
@@ -554,12 +555,12 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 
 ## Qwen3.5-35B-A3B-FP8 (Feb 2026)
 
-**Status:** RUNNING on spark-2 single-node, port 8000. Stability test (no Ray/compiled DAG).
+**Status:** NOT running (122B FP8 TP=2 deployed instead).
 **Model:** `Qwen/Qwen3.5-35B-A3B-FP8` (35B total, 3B active per token)
 **Container:** `vllm/vllm-openai:cu130-nightly` (v0.16.1rc1.dev111)
-**Script:** `./start-vllm-fast.sh` | **API:** `http://192.168.110.2:8000/v1`
-**Memory:** 34.71 GiB, 0.85 util, KV cache 816K tokens (62.3 GiB).
-**Config fix:** `rope_theta: 10000000` added (same bug as 122B).
+**Script:** `./start-vllm-fast.sh` | **Memory:** 34.71 GiB, 0.85 util, KV cache 816K tokens.
+**Benchmark (single-node):** Peak 631.7 dec/s at c=256. TP=2: 657.2 dec/s.
+**Stability:** Single-node ran 2+ hours stable. TP=2 crashed after ~42 min (compiled DAG).
 **FLA warning:** First request slow (~30s warmup). `fla/ops/utils.py` shape mismatch warning — cosmetic.
 
 ## Qwen3.5-397B-A17B-NVFP4 (Feb 2026)

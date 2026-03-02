@@ -34,9 +34,9 @@ ENV="$ENV -e TORCH_NCCL_DESYNC_DEBUG=1"
 ENV="$ENV -e TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200"
 ENV="$ENV -e TORCH_NCCL_ENABLE_MONITORING=0"
 ENV="$ENV -e VLLM_TEST_FORCE_FP8_MARLIN=1"  # Force Marlin MoE backend - CUTLASS crashes on sm_121a
-ENV="$ENV -e VLLM_ENCODER_CACHE_TOKENS=131072"  # 128K encoder cache (~0.75 GiB), decoupled from max_num_batched_tokens
 # ENV="$ENV -e VLLM_NVFP4_GEMM_BACKEND=marlin"  # NVFP4-only, not needed for FP8
-# Note: VLLM_USE_RAY_COMPILED_DAG=0 may not work for multi-node - vLLM V1 forces it to 1
+# Force NCCL channel for compiled DAG (auto picks shared memory which crashes on aarch64/UMA)
+ENV="$ENV -e VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE=nccl"
 
 if [ "$DEBUG_NCCL" = "1" ]; then
   ENV="$ENV -e NCCL_DEBUG=INFO -e NCCL_DEBUG_SUBSYS=INIT,NET"
