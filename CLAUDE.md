@@ -434,12 +434,13 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Other fixes:** object-store-memory=2G, --include-dashboard=false, RAY_CGRAPH_get_timeout=3600, single-rail NCCL, --max-num-seqs 32, NCCL watchdog off, FP8 KV cache disabled.
 
-**Hard crash (Mar 2026):** spark-2 crashed 3x under CUDA load (model loading + inference). FP8 KV cache (`--kv-cache-dtype fp8`) suspected trigger — disabled for testing. Head moved back to spark-2 for Grafana compatibility.
+**Hard crash (Mar 2026):** spark-2 crashed 4+ times under CUDA load — full machine unresponsive (all interfaces down, requires physical power cycle). FP8 KV cache disabled but crashes continue. May be hardware/firmware issue specific to spark-2. Consider swapping head to spark-3.
 
 **Compiled DAG deadlock:** V1 forces compiled DAG on (`VLLM_USE_RAY_COMPILED_DAG=0` is ignored in v0.16). Client disconnects (e.g. short curl timeouts) leave stale requests → engine hangs at 0 tok/s indefinitely. No NCCL error, no crash — just stuck. **Avoid short client timeouts** (use 300s+). `RAY_CGRAPH_get_timeout=3600` (1hr). `RAY_CGRAPH_submit_timeout=3600`.
 **NCCL flight recorder:** `TORCH_NCCL_TRACE_BUFFER_SIZE=2000`, `TORCH_NCCL_DUMP_ON_TIMEOUT=1`, `TORCH_NCCL_DESYNC_DEBUG=1` — forensic data on stalls.
 **mp backend NOT viable (Mar 2026):** SHM bug (#33628) on aarch64 multi-node — PR #34169 not merged. Must stay on Ray.
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
+**Monitor:** `vllm-monitor.sh` — hourly health check, auto-redeploys on failure. Now running on `cu130-nightly`.
 **No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
 
 ### Head vs Worker Clock Speeds
@@ -521,14 +522,14 @@ Peak: **493 dec tok/s** at c=256.
 ## Qwen3.5-122B-A10B-FP8 (Feb 2026)
 
 **Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker).
-**Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:qwen3_5-cu130` (upgrade to `cu130-nightly` pulled on both nodes)
+**Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:cu130-nightly` (v0.16.1rc1.dev111)
 **Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.110.2:8000/v1`
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** `VLLM_TEST_FORCE_FP8_MARLIN=1` — CUTLASS crashes on sm_121a.
-**Memory:** 59.1 GiB/node, 0.70 util, no FP8 KV (disabled — suspected crash cause). **TTFT:** ~6s.
+**Memory:** 59.1 GiB/node, 0.70 util, no FP8 KV (disabled — suspected crash cause). KV cache: 442K tokens (20.45 GiB).
 **Multimodal:** Images enabled (`--limit-mm-per-prompt '{"video": 0}'`). Video disabled.
-**Encoder cache:** 128K tokens via `VLLM_ENCODER_CACHE_TOKENS=131072` + `vllm_scheduler_patched.py`.
+**Encoder cache:** 16K tokens (nightly default). Old `VLLM_ENCODER_CACHE_TOKENS` env var no longer read (scheduler patch removed for nightly compat).
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
