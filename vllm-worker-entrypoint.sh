@@ -2,6 +2,15 @@
 # Worker node entrypoint: retry Ray join until head is available
 set -u
 
+# Apply ray_executor patch (bypass compiled DAG)
+if [ -f /tmp/ray_executor_patched.py ]; then
+    VLLM_DIR=$(python3 -c "import vllm;print(vllm.__path__[0])" 2>/dev/null)
+    if [ -n "$VLLM_DIR" ]; then
+        cp /tmp/ray_executor_patched.py "$VLLM_DIR/v1/executor/ray_executor.py"
+        echo "Patched ray_executor.py in $VLLM_DIR"
+    fi
+fi
+
 HEAD_ADDR="${RAY_HEAD_IP}:6379"
 
 echo "=== Waiting for Ray head at $HEAD_ADDR ==="

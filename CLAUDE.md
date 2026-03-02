@@ -436,8 +436,10 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Hard crash (Mar 2026):** spark-2 crashed 4+ times under CUDA load — full machine unresponsive (all interfaces down, requires physical power cycle). FP8 KV cache disabled but crashes continue. May be hardware/firmware issue specific to spark-2. Consider swapping head to spark-3.
 
-**Compiled DAG deadlock:** V1 forces compiled DAG on. Worker crashes after ~40 min regardless of model size (tested with 35B and 122B). Not cable/GID related — pure software issue.
-**DAG channel fix (Mar 2026):** `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE=nccl` — forces NCCL transport instead of `auto` (shared memory unstable on aarch64/UMA). Testing stability.
+**Compiled DAG deadlock:** V1 forces compiled DAG on. Worker crashes after ~40 min regardless of model size (tested with 35B and 122B). Not cable/GID related — pure software issue (Ray #58426).
+**Fix (Mar 2026):** `VLLM_RAY_NO_COMPILED_DAG=1` — patched `ray_executor.py` to use direct `.remote()` calls instead of compiled DAG. Keeps Ray for coordination but bypasses the deadlock-prone DAG graph. Patch applied via SCP + entrypoint copy at container start. Throughput: ~21 tok/s decode (comparable to compiled DAG).
+**Result:** No more DAG deadlocks. Worker still crashes at ~48 min (SIGSEGV/OOM, not deadlock — different root cause). Machine stays up (no hard crash).
+**Previous attempt:** `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE=nccl` — did not prevent deadlock.
 **NCCL flight recorder:** `TORCH_NCCL_TRACE_BUFFER_SIZE=2000`, `TORCH_NCCL_DUMP_ON_TIMEOUT=1`, `TORCH_NCCL_DESYNC_DEBUG=1` — forensic data on stalls.
 **mp backend NOT viable (Mar 2026):** SHM bug (#33628) on aarch64 multi-node — PR #34169 not merged. Must stay on Ray.
 **SGLang for FP8 (Mar 2026):** Not viable — CUTLASS FP8 broken on sm_121a, no Marlin workaround equivalent.

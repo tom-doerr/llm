@@ -21,12 +21,12 @@ ENV="$ENV -e NCCL_NET_GDR_LEVEL=LOC -e NCCL_NET_GDR_C2C=0"
 ENV="$ENV -e NCCL_IB_HCA='=rocep1s0f1:1'"  # Single-rail (reduces pinned buffers on UMA)
 ENV="$ENV -e NCCL_SOCKET_IFNAME=$OOB_IF"
 ENV="$ENV -e GLOO_SOCKET_IFNAME=$OOB_IF"
-ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF -e RAY_memory_monitor_refresh_ms=0"
+ENV="$ENV -e UCX_NET_DEVICES=$OOB_IF"
+ENV="$ENV -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
 ENV="$ENV -e VLLM_SLEEP_WHEN_IDLE=0"  # Disabled: stale requests prevent wake-up, causing hung requests
 ENV="$ENV -e OMP_NUM_THREADS=1"  # Reduce threading overhead
-ENV="$ENV -e RAY_CGRAPH_get_timeout=3600"  # 1hr compiled DAG timeout
-ENV="$ENV -e RAY_CGRAPH_submit_timeout=3600"  # 1hr submit timeout
+ENV="$ENV -e VLLM_RAY_NO_COMPILED_DAG=1"  # Bypass compiled DAG (Ray #58426 deadlock)
 # PyTorch NCCL flight recorder (forensic data on stalls)
 ENV="$ENV -e TORCH_NCCL_TRACE_BUFFER_SIZE=2000"
 ENV="$ENV -e TORCH_NCCL_DUMP_ON_TIMEOUT=1"
@@ -35,8 +35,7 @@ ENV="$ENV -e TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=7200"
 ENV="$ENV -e TORCH_NCCL_ENABLE_MONITORING=0"
 ENV="$ENV -e VLLM_TEST_FORCE_FP8_MARLIN=1"  # Force Marlin MoE backend - CUTLASS crashes on sm_121a
 # ENV="$ENV -e VLLM_NVFP4_GEMM_BACKEND=marlin"  # NVFP4-only, not needed for FP8
-# Force NCCL channel for compiled DAG (auto picks shared memory which crashes on aarch64/UMA)
-ENV="$ENV -e VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE=nccl"
+# VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE no longer needed (compiled DAG bypassed)
 
 if [ "$DEBUG_NCCL" = "1" ]; then
   ENV="$ENV -e NCCL_DEBUG=INFO -e NCCL_DEBUG_SUBSYS=INIT,NET"
@@ -49,12 +48,14 @@ ENV_WORKER="$ENV -e VLLM_HOST_IP=$WORKER_IP"
 
 VOLS="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS="$VOLS -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
+VOLS="$VOLS -v /tmp/ray_executor_patched.py:/tmp/ray_executor_patched.py:ro"
 VOLS="$VOLS -v /tmp/vllm-head-ep.sh:/entrypoint.sh:ro"
 VOLS="$VOLS -v /tmp/vllm-serve-cmd.sh:/vllm-serve-cmd.sh:ro"
 # qwen3_5.py: use container's built-in version (imports transformers inline, not from transformers.models.qwen3_5)
 # scheduler patch removed: nightly has incompatible SchedulerConfig (max_num_scheduled_tokens)
 VOLS_WORKER="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS_WORKER="$VOLS_WORKER -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
+VOLS_WORKER="$VOLS_WORKER -v /tmp/ray_executor_patched.py:/tmp/ray_executor_patched.py:ro"
 VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm-worker-ep.sh:/entrypoint.sh:ro"
 # qwen3_5.py: use container's built-in version
 # scheduler patch removed for nightly compatibility
@@ -63,9 +64,11 @@ echo "=== Cleanup ==="
 ssh spark-2 "docker rm -f vllm-head 2>/dev/null; for f in /tmp/vllm-head-ep.sh /tmp/vllm-serve-cmd.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
 ssh spark-3 "docker rm -f vllm-worker 2>/dev/null; for f in /tmp/vllm-worker-ep.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
 
-echo "=== Deploying entrypoint scripts ==="
+echo "=== Deploying scripts ==="
 scp -q /home/tom/llm/vllm-head-entrypoint.sh spark-2:/tmp/vllm-head-ep.sh
 scp -q /home/tom/llm/vllm-worker-entrypoint.sh spark-3:/tmp/vllm-worker-ep.sh
+scp -q /home/tom/llm/vllm/vllm/v1/executor/ray_executor.py spark-2:/tmp/ray_executor_patched.py
+scp -q /home/tom/llm/vllm/vllm/v1/executor/ray_executor.py spark-3:/tmp/ray_executor_patched.py
 # qwen3_5.py: using container's built-in version
 
 # echo "=== Drop caches ==="
