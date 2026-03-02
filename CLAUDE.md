@@ -436,9 +436,10 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Hard crash (Mar 2026):** spark-2 crashed 4+ times under CUDA load — full machine unresponsive (all interfaces down, requires physical power cycle). FP8 KV cache disabled but crashes continue. May be hardware/firmware issue specific to spark-2. Consider swapping head to spark-3.
 
-**Compiled DAG deadlock:** V1 forces compiled DAG on (`VLLM_USE_RAY_COMPILED_DAG=0` is ignored in v0.16). Client disconnects (e.g. short curl timeouts) leave stale requests → engine hangs at 0 tok/s indefinitely. No NCCL error, no crash — just stuck. **Avoid short client timeouts** (use 300s+). `RAY_CGRAPH_get_timeout=3600` (1hr). `RAY_CGRAPH_submit_timeout=3600`.
+**Compiled DAG deadlock:** V1 forces compiled DAG on. Throughput drops to 0 with stuck request, NCCL watchdog kills worker after 600s. Happens regardless of QSFP cable state (confirmed with cables unplugged). Not cable/GID related — pure software issue. `RAY_CGRAPH_get_timeout=3600` (1hr). `RAY_CGRAPH_submit_timeout=3600`.
 **NCCL flight recorder:** `TORCH_NCCL_TRACE_BUFFER_SIZE=2000`, `TORCH_NCCL_DUMP_ON_TIMEOUT=1`, `TORCH_NCCL_DESYNC_DEBUG=1` — forensic data on stalls.
 **mp backend NOT viable (Mar 2026):** SHM bug (#33628) on aarch64 multi-node — PR #34169 not merged. Must stay on Ray.
+**SGLang for FP8 (Mar 2026):** Not viable — CUTLASS FP8 broken on sm_121a, no Marlin workaround equivalent.
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
 **Monitor:** `vllm-monitor.sh` — hourly health check, auto-redeploys on failure. Now running on `cu130-nightly`.
 **No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
