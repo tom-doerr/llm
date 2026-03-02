@@ -434,7 +434,7 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Other fixes:** object-store-memory=2G, --include-dashboard=false, RAY_CGRAPH_get_timeout=3600, single-rail NCCL, --max-num-seqs 32, NCCL watchdog off, FP8 KV cache disabled.
 
-**Hard crash (Mar 2026):** spark-2 crashed 4+ times under CUDA load — full machine unresponsive (all interfaces down, requires physical power cycle). FP8 KV cache disabled but crashes continue. May be hardware/firmware issue specific to spark-2. Consider swapping head to spark-3.
+**Hard crash (Mar 2026):** spark-2 crashed 4+ times under CUDA load — full machine unresponsive (all interfaces down, requires physical power cycle). FP8 KV cache disabled but crashes continue. Also triggered by single-node 122B at 0.85 gpu-memory-utilization (62.65 GiB model on 128 GiB UMA — too aggressive). Use 0.70 max for 122B single-node.
 
 **Compiled DAG deadlock:** V1 forces compiled DAG on. Worker crashes after ~40 min regardless of model size (tested with 35B and 122B). Not cable/GID related — pure software issue (Ray #58426).
 **Fix (Mar 2026):** `VLLM_RAY_NO_COMPILED_DAG=1` — patched `ray_executor.py` to use direct `.remote()` calls instead of compiled DAG. Keeps Ray for coordination but bypasses the deadlock-prone DAG graph. Patch applied via SCP + entrypoint copy at container start. Throughput: ~21 tok/s decode (comparable to compiled DAG).
@@ -549,18 +549,22 @@ Peak: **493 dec tok/s** at c=256.
 
 Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 
-## Qwen3.5-122B-A10B Intel AutoRound int4 (Feb 2026)
+## Qwen3.5-122B-A10B Intel AutoRound int4 (Mar 2026)
 
-**Model:** `Intel/Qwen3.5-122B-A10B-int4-AutoRound` (~67 GB)
-**Status:** BROKEN — MoE gate weights not loaded (skipped as "not found in params_dict"). Produces garbage output. vLLM `inc` backend incompatible with `auto_round:auto_gptq` packing. Needs newer vLLM or `auto_round` library.
+**Model:** `Intel/Qwen3.5-122B-A10B-int4-AutoRound` (~67 GB, 62.65 GiB loaded)
+**Status:** WORKING on cu130-nightly (v0.16.1rc1.dev111). `inc` backend + MarlinLinearKernel.
+**Script:** `MODEL="Intel/Qwen3.5-122B-A10B-int4-AutoRound" ./start-vllm-fast.sh`
+**Memory:** 62.65 GiB model, 0.70 gpu-memory-utilization (0.85 caused hard freeze on UMA).
+**Thinking:** Enabled by default via `--reasoning-parser qwen3`. Disable per-request with `enable_thinking: false`.
 **Tokenizer fix:** `tokenizer_class` changed from `TokenizersBackend` to `Qwen2Tokenizer` (patched on both nodes).
+**Note:** Previously broken (Feb 2026) — MoE gate weights not loaded. Fixed in nightly.
 
 ## Qwen3.5-35B-A3B-FP8 (Feb 2026)
 
 **Status:** NOT running (122B FP8 TP=2 deployed instead).
 **Model:** `Qwen/Qwen3.5-35B-A3B-FP8` (35B total, 3B active per token)
 **Container:** `vllm/vllm-openai:cu130-nightly` (v0.16.1rc1.dev111)
-**Script:** `./start-vllm-fast.sh` | **Memory:** 34.71 GiB, 0.85 util, KV cache 816K tokens.
+**Script:** `./start-vllm-fast.sh` | **Memory:** 34.71 GiB, 0.70 util (default), KV cache 816K tokens.
 **Benchmark (single-node):** Peak 631.7 dec/s at c=256. TP=2: 657.2 dec/s.
 **Stability:** Single-node ran 2+ hours stable. TP=2 crashed after ~42 min (compiled DAG).
 **FLA warning:** First request slow (~30s warmup). `fla/ops/utils.py` shape mismatch warning — cosmetic.
