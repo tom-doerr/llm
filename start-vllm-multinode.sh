@@ -11,7 +11,7 @@ for arg in "$@"; do
 done
 
 MODEL="${MODEL:-Qwen/Qwen3.5-122B-A10B-FP8}"
-CONTAINER="${CONTAINER:-vllm/vllm-openai:qwen3_5-cu130}"
+CONTAINER="${CONTAINER:-vllm/vllm-openai:cu130-nightly}"
 OOB_IF="enp1s0f1np1"  # Control plane interface
 HEAD_IP="192.168.100.10"
 WORKER_IP="192.168.100.11"
@@ -52,12 +52,12 @@ VOLS="$VOLS -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.
 VOLS="$VOLS -v /tmp/vllm-head-ep.sh:/entrypoint.sh:ro"
 VOLS="$VOLS -v /tmp/vllm-serve-cmd.sh:/vllm-serve-cmd.sh:ro"
 # qwen3_5.py: use container's built-in version (imports transformers inline, not from transformers.models.qwen3_5)
-VOLS="$VOLS -v /tmp/vllm_scheduler_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/config/scheduler.py:ro"
+# scheduler patch removed: nightly has incompatible SchedulerConfig (max_num_scheduled_tokens)
 VOLS_WORKER="-v /home/tom/.cache/huggingface:/root/.cache/huggingface"
 VOLS_WORKER="$VOLS_WORKER -v /home/tom/llm/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro"
 VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm-worker-ep.sh:/entrypoint.sh:ro"
 # qwen3_5.py: use container's built-in version
-VOLS_WORKER="$VOLS_WORKER -v /tmp/vllm_scheduler_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/config/scheduler.py:ro"
+# scheduler patch removed for nightly compatibility
 
 echo "=== Cleanup ==="
 ssh spark-2 "docker rm -f vllm-head 2>/dev/null; for f in /tmp/vllm-head-ep.sh /tmp/vllm-serve-cmd.sh /tmp/vllm_scheduler_patched.py; do [ -d \"\$f\" ] && rmdir \"\$f\"; done; true"
@@ -66,8 +66,6 @@ ssh spark-3 "docker rm -f vllm-worker 2>/dev/null; for f in /tmp/vllm-worker-ep.
 echo "=== Deploying entrypoint scripts ==="
 scp -q /home/tom/llm/vllm-head-entrypoint.sh spark-2:/tmp/vllm-head-ep.sh
 scp -q /home/tom/llm/vllm-worker-entrypoint.sh spark-3:/tmp/vllm-worker-ep.sh
-scp -q /home/tom/llm/vllm_scheduler_patched.py spark-2:/tmp/vllm_scheduler_patched.py
-scp -q /home/tom/llm/vllm_scheduler_patched.py spark-3:/tmp/vllm_scheduler_patched.py
 # qwen3_5.py: using container's built-in version
 
 # echo "=== Drop caches ==="
