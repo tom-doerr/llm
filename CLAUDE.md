@@ -436,7 +436,9 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Hard crash (Mar 2026):** spark-2 crashed 3x under CUDA load (model loading + inference). FP8 KV cache (`--kv-cache-dtype fp8`) suspected trigger — disabled for testing. Head moved back to spark-2 for Grafana compatibility.
 
-**Compiled DAG deadlock:** V1 forces compiled DAG on (`VLLM_USE_RAY_COMPILED_DAG=0` is ignored in v0.16). Client disconnects (e.g. short curl timeouts) leave stale requests → engine hangs at 0 tok/s indefinitely. No NCCL error, no crash — just stuck. **Avoid short client timeouts** (use 300s+). `RAY_CGRAPH_get_timeout=3600` (1hr).
+**Compiled DAG deadlock:** V1 forces compiled DAG on (`VLLM_USE_RAY_COMPILED_DAG=0` is ignored in v0.16). Client disconnects (e.g. short curl timeouts) leave stale requests → engine hangs at 0 tok/s indefinitely. No NCCL error, no crash — just stuck. **Avoid short client timeouts** (use 300s+). `RAY_CGRAPH_get_timeout=3600` (1hr). `RAY_CGRAPH_submit_timeout=3600`.
+**NCCL flight recorder:** `TORCH_NCCL_TRACE_BUFFER_SIZE=2000`, `TORCH_NCCL_DUMP_ON_TIMEOUT=1`, `TORCH_NCCL_DESYNC_DEBUG=1` — forensic data on stalls.
+**mp backend NOT viable (Mar 2026):** SHM bug (#33628) on aarch64 multi-node — PR #34169 not merged. Must stay on Ray.
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
 **No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
 
@@ -519,7 +521,7 @@ Peak: **493 dec tok/s** at c=256.
 ## Qwen3.5-122B-A10B-FP8 (Feb 2026)
 
 **Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker).
-**Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:qwen3_5-cu130`
+**Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:qwen3_5-cu130` (upgrade to `cu130-nightly` pulled on both nodes)
 **Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.110.2:8000/v1`
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
