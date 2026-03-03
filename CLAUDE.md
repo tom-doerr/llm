@@ -480,7 +480,7 @@ budget with WAITING request prefills. No artificial serialization.
 **TP (default):** `./start-vllm-multinode.sh` - Tensor parallel, splits layers across GPUs
 **PP mode:** `./start-vllm-multinode.sh --pp` - Pipeline parallel, each GPU runs different layers
 
-Both modes work. Heavy prefill queues can make throughput appear zero initially - wait for ramp-up.
+**PP broken with DAG bypass (Mar 2026):** `_execute_remote_impl()` passes intermediate tensors as tuples, but PP stage 1+ expects dicts (`items()` call). Only TP works with `VLLM_RAY_NO_COMPILED_DAG=1`.
 
 ### Recovery (Feb 2026)
 
