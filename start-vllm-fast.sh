@@ -1,8 +1,8 @@
 #!/bin/bash
-# Start fast single-node vLLM on spark-2 (Qwen3.5-35B-A3B-FP8)
-# Single-node, no Ray, no compiled DAG. Port 8000 by default.
+# Start fast single-node vLLM on spark-2. Port 8000 by default.
+# Single-node, no Ray, no compiled DAG.
 set -e
-MODEL="${MODEL:-Qwen/Qwen3.5-35B-A3B-FP8}"
+MODEL="${MODEL:-Intel/Qwen3.5-122B-A10B-int4-AutoRound}"
 CONTAINER="${CONTAINER:-vllm/vllm-openai:cu130-nightly}"
 PORT="${PORT:-8000}"; NAME="vllm-fast"
 ENV="-e HF_HUB_OFFLINE=1 -e VLLM_SLEEP_WHEN_IDLE=1"
