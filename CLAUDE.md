@@ -254,10 +254,7 @@ export RAY_memory_monitor_refresh_ms=0
 
 **Max throughput path:** TRT-LLM + NVFP4 (23,477 tok/s prefill, 11.73 tok/s decode). See [build.nvidia.com/spark/trt-llm/stacked-sparks](https://build.nvidia.com/spark/trt-llm/stacked-sparks)
 
-**cuDNN Fix (REQUIRED):** GB10 lacks cuDNN conv3d kernels for sm_121. Mount import hook:
-```bash
--v /home/tom/sitecustomize.py:/usr/lib/python3.12/sitecustomize.py:ro
-```
+**cuDNN (Mar 2026):** cuDNN works on GB10 sm_121a with cuDNN 9.15+ (binary compat from sm_120). Previously disabled globally — was wrong, the Conv3d bug was cuDNN < 9.15, not sm_121a. sitecustomize.py no longer disables cuDNN. Image TTFT: 3-12x faster with cuDNN (1024x1024: 1.2s vs 14.8s).
 
 **Attention Backend Fix (REQUIRED for VLM):** Vision encoder profiling hangs without this:
 ```bash
@@ -499,7 +496,7 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 
 **SSH:** spark-2 ↔ spark-3 keys configured.
 
-**Working (Jan 2026):** vLLM TP=2 with sitecustomize.py cuDNN disable + HF_HUB_OFFLINE=1. FP8 KV cache disabled (Mar 2026, suspected crash cause).
+**Working (Mar 2026):** vLLM with cuDNN enabled (sitecustomize.py no longer disables it) + HF_HUB_OFFLINE=1. FP8 KV cache disabled (suspected crash cause).
 
 **Model load:** ~3 min (42 shards) + ~5 min encoder profiling. **TTFT:** ~5s.
 
