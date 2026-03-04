@@ -116,7 +116,7 @@
             "type": "prometheus",
             "uid": "cfagbva82okjkf"
           },
-          "expr": "sum(rate(vllm:request_success_total[1m]))",
+          "expr": "sum(rate(vllm:request_success_total[30s]))",
           "legendFormat": "req/s",
           "refId": "A"
         }
@@ -229,7 +229,7 @@
             "type": "prometheus",
             "uid": "cfagbva82okjkf"
           },
-          "expr": "sum(rate(vllm:generation_tokens_total[1m])) or sum(rate(llamacpp:tokens_predicted_total[1m]))",
+          "expr": "sum(rate(vllm:generation_tokens_total[30s])) or sum(rate(llamacpp:tokens_predicted_total[30s])) or llamacpp:predicted_tokens_seconds",
           "legendFormat": "tok/s",
           "refId": "A"
         }
@@ -261,7 +261,7 @@
             "type": "prometheus",
             "uid": "cfagbva82okjkf"
           },
-          "expr": "sum(rate(vllm:prompt_tokens_total[1m])) or sum(rate(llamacpp:prompt_tokens_total[1m]))",
+          "expr": "sum(rate(vllm:prompt_tokens_total[30s])) or sum(rate(llamacpp:prompt_tokens_total[30s])) or llamacpp:prompt_tokens_seconds",
           "legendFormat": "tok/s",
           "refId": "A"
         }
@@ -387,6 +387,24 @@
           "expr": "sum(rate(vllm:prefix_cache_queries_total[30s])) - sum(rate(vllm:prefix_cache_hits_total[30s]))",
           "legendFormat": "Prefill tok/s (non-cached)",
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "llamacpp:predicted_tokens_seconds",
+          "legendFormat": "Generation (server gauge)",
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "cfagbva82okjkf"
+          },
+          "expr": "llamacpp:prompt_tokens_seconds",
+          "legendFormat": "Prompt (server gauge)",
+          "refId": "E"
         }
       ],
       "title": "Token Throughput Over Time",
