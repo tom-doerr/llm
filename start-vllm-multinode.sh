@@ -1,13 +1,15 @@
 #!/bin/bash
 # Start vLLM multi-node on spark-2 (head) + spark-3 (worker)
-# Usage: ./start-vllm-multinode.sh [--debug] [--pp]
+# Usage: ./start-vllm-multinode.sh [--debug] [--pp] [--dp]
 set -e
 
 DEBUG_NCCL=${DEBUG_NCCL:-0}
 USE_PP=${USE_PP:-0}
+USE_DP=${USE_DP:-0}
 for arg in "$@"; do
   [[ "$arg" == "--debug" ]] && DEBUG_NCCL=1
   [[ "$arg" == "--pp" ]] && USE_PP=1
+  [[ "$arg" == "--dp" ]] && USE_DP=1
 done
 
 MODEL="${MODEL:-Qwen/Qwen3.5-122B-A10B-FP8}"
@@ -78,7 +80,10 @@ scp -q /home/tom/llm/vllm/vllm/v1/executor/ray_executor.py spark-3:/tmp/ray_exec
 RDMA="--device=/dev/infiniband --ulimit memlock=-1 --cap-add=IPC_LOCK"
 
 echo "=== Building vLLM args ==="
-if [ "$USE_PP" = "1" ]; then
+if [ "$USE_DP" = "1" ]; then
+  echo "Mode: Data Parallel (DP=2, each node runs full model)"
+  VLLM_ARGS="--data-parallel-size 2 --trust-remote-code"
+elif [ "$USE_PP" = "1" ]; then
   echo "Mode: Pipeline Parallel (PP=2)"
   VLLM_ARGS="--pipeline-parallel-size 2 --trust-remote-code"
 else

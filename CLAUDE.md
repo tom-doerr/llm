@@ -475,12 +475,19 @@ budget with WAITING request prefills. No artificial serialization.
 
 **`--gpu-memory-utilization`:** 0.70 minimum. 0.65 hangs (no KV cache room).
 
-### TP vs PP Mode
+### TP vs PP vs DP Mode
 
-**TP (default):** `./start-vllm-multinode.sh` - Tensor parallel, splits layers across GPUs
-**PP mode:** `./start-vllm-multinode.sh --pp` - Pipeline parallel, each GPU runs different layers
+**TP (default):** `./start-vllm-multinode.sh` - Tensor parallel, splits model across GPUs
+**PP mode:** `./start-vllm-multinode.sh --pp` - Pipeline parallel, layers split across GPUs
+**DP mode:** `./start-vllm-multinode.sh --dp` - Data parallel, full model per node
 
-**PP broken with DAG bypass (Mar 2026):** `_execute_remote_impl()` passes intermediate tensors as tuples, but PP stage 1+ expects dicts (`items()` call). Only TP works with `VLLM_RAY_NO_COMPILED_DAG=1`.
+**TP=2 stability:** Crashes ~40-57 min (compiled DAG deadlock, Ray #58426). DAG bypass patch delays but doesn't fully prevent crashes (~48 min SIGSEGV/OOM).
+
+**PP broken:** DAG bypass passes tuples, PP expects dicts. Only TP works with bypass.
+
+**DP NOT viable for 122B FP8 (Mar 2026):** vLLM `--data-parallel-size 2` spawns both engines locally (doesn't distribute via Ray). Independent instances OOM: 119 GiB mmap exceeds 128 GiB UMA. Only viable for models ≤~75 GiB (e.g. 35B-FP8, 122B-AWQ-4bit).
+
+**397B on 2x Spark (community):** int4-AutoRound vLLM TP=2 ~26-30 tok/s (best), Q2_K llama.cpp ~15.6, Q4_K_XL ~11, NVFP4 broken on sm_121a, FP8 needs 4 nodes.
 
 ### Recovery (Feb 2026)
 
