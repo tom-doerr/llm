@@ -49,6 +49,8 @@ sudo ip addr add 192.168.177.22/24 dev enP2p1s0f1np1
 ```
 Set MTU 9000 and disable IPv6 for stable RoCE GID indexing.
 
+**Jumbo frames (MTU 9000):** Already enabled on all QSFP interfaces across all 3 Sparks (set in netplan `40-cx7.yaml`).
+
 ## Verification Commands
 
 ```bash
@@ -485,9 +487,24 @@ budget with WAITING request prefills. No artificial serialization.
 
 **PP broken:** DAG bypass passes tuples, PP expects dicts. Only TP works with bypass.
 
-**DP NOT viable for 122B FP8 (Mar 2026):** vLLM `--data-parallel-size 2` spawns both engines locally (doesn't distribute via Ray). Independent instances OOM: 119 GiB mmap exceeds 128 GiB UMA. Only viable for models ≤~75 GiB (e.g. 35B-FP8, 122B-AWQ-4bit).
+**DP local-only limitation:** `--data-parallel-size 2` without extra flags spawns both engines locally. 122B FP8 OOMs (119 GiB > 128 GiB UMA).
+
+**DP native multi-node (Mar 2026, WORKING):** Use `--headless` on worker for true multi-node DP. Single API endpoint on head, internal LB, no Ray.
+- Key flags: `--data-parallel-size 2 --data-parallel-size-local 1 --data-parallel-address <head-ip> --data-parallel-rpc-port 13345 --data-parallel-start-rank {0|1}`
+- Worker adds `--headless` (no `--host`/`--port`)
+- Requires: `GLOO_SOCKET_IFNAME` + NCCL RDMA env vars + `/dev/infiniband`
+- Scripts: `/tmp/vllm-dp-head.sh`, `/tmp/vllm-dp-worker.sh`
+- Tested: int4-AutoRound 122B (34.7 GiB/node, 45.95 GiB KV/node)
 
 **397B on 2x Spark (community):** int4-AutoRound vLLM TP=2 ~26-30 tok/s (best), Q2_K llama.cpp ~15.6, Q4_K_XL ~11, NVFP4 broken on sm_121a, FP8 needs 4 nodes.
+
+### Spark Arena Recipes (Mar 2026)
+
+**Repo:** `eugr/spark-vllm-docker` — community YAML "one-click deploy" recipes for DGX Spark.
+**Local clone:** `/home/tom/llm/spark-vllm-docker/` (spark-1), `~/spark-vllm-docker/` (spark-2)
+**Usage:** `./run-recipe.sh recipes/<name>.yaml --setup -n <head-ip>,<worker-ip> -d`
+**122B recipe:** `qwen3.5-122b-int4-autoround.yaml` — Ray TP=2, fastsafetensors, tf5, Marlin atomic add.
+**Build:** Compiles vLLM + FlashInfer from source for sm_121a. Downloads prebuilt FlashInfer wheels from GitHub releases.
 
 ### Recovery (Feb 2026)
 
