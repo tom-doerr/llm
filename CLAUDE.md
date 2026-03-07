@@ -619,6 +619,16 @@ Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
 **Stability:** Single-node ran 2+ hours stable. TP=2 crashed after ~42 min (compiled DAG).
 **FLA warning:** First request slow (~30s warmup). `fla/ops/utils.py` shape mismatch warning — cosmetic.
 
+## Qwen3.5-27B-FP8 on spark-3 (Mar 2026)
+
+**Status:** RUNNING single-node on spark-3, port 8000.
+**Model:** `Qwen/Qwen3.5-27B-FP8` (27B dense) | **Container:** `cu130-nightly`
+**Memory:** 28.51 GiB model, 51.94 GiB KV cache (212K tokens), 0.70 util.
+**API:** `http://192.168.120.3:8000/v1/chat/completions`
+**Reasoning:** `--reasoning-parser qwen3`, `--enforce-eager`.
+**Benchmark (single-node, Mar 2026):** Peak **253 dec/s** at c=256, p50 23.9s.
+Wins at high concurrency vs 122B int4 (1.4x at c=64+), loses at low c (dense vs MoE).
+
 ## Qwen3.5-397B-A17B-NVFP4 (Feb 2026)
 
 **Model:** `nvidia/Qwen3.5-397B-A17B-NVFP4` (~224 GB). On all 3 sparks.
