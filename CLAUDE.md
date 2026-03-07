@@ -156,6 +156,14 @@ docker run ... \
 
 **Config:** `/etc/netplan/40-cx7.yaml` on both machines (persistent)
 
+### RDMA Stress Test Results (Mar 2026)
+
+spark-2 ↔ spark-3 (port 1), no GPU needed:
+Single rail: **107 Gb/s**. Dual-rail: **196 Gb/s**. Bidir 120s: **153 Gb/s** (62K iters).
+Latency 4KB: **3.18 µs** typical. Saturates at 2KB. Zero HW errors/discards.
+26 pause frames in 120s (negligible). **RDMA fabric is healthy.**
+**Caveat:** `ib_write_bw` only tests NIC/verbs — NOT NCCL+GPU+UMA path.
+
 ## 200G QSFP Links: All-to-All (Feb 2026)
 
 3 Sparks connected all-to-all via QSFP DAC cables. Config: `/etc/netplan/40-cx7.yaml`.
@@ -433,6 +441,8 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 
 **Other fixes:** object-store-memory=2G, --include-dashboard=false, RAY_CGRAPH_get_timeout=3600, single-rail NCCL, --max-num-seqs 32, NCCL watchdog off, FP8 KV cache disabled.
 
+**NCCL GID selection (Mar 2026):** Do NOT pin `NCCL_IB_GID_INDEX` on NCCL 2.21+ (auto-selects correctly). If needed, prefer `NCCL_IB_ROCE_VERSION_NUM=2` and `NCCL_IB_ADDR_FAMILY=AF_INET`.
+
 **Hard crash (Mar 2026):** spark-2 crashed 4+ times under CUDA load — full machine unresponsive (all interfaces down, requires physical power cycle). FP8 KV cache disabled but crashes continue. Also triggered by single-node 122B at 0.85 gpu-memory-utilization (62.65 GiB model on 128 GiB UMA — too aggressive). Use 0.70 max for 122B single-node.
 
 **Compiled DAG deadlock:** V1 forces compiled DAG on. Worker crashes after ~40 min regardless of model size (tested with 35B and 122B). Not cable/GID related — pure software issue (Ray #58426).
@@ -440,12 +450,19 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 **Result:** No more DAG deadlocks. Worker still crashes at ~27-48 min (NCCL timeout / SIGSEGV).
 **DP=2 also unstable:** MoE models use EP (Expert Parallel) over NCCL even in DP mode → same crash pattern (~24 min).
 **Single-node 122B int4 is the stable deployment.** Multi-node remains unstable for all executor backends.
+**Exit 137 ≠ OOM proven:** 137=SIGKILL, could be OOM, docker kill, or failed shutdown. Need `docker inspect --format '{{json .State.OOMKilled}}'` + `journalctl -k | grep oom` to confirm.
 **NCCL flight recorder:** `TORCH_NCCL_TRACE_BUFFER_SIZE=2000`, `TORCH_NCCL_DUMP_ON_TIMEOUT=1`, `TORCH_NCCL_DESYNC_DEBUG=1` — forensic data on stalls.
 **mp backend NOT viable (Mar 2026):** SHM bug (#33628) on aarch64 multi-node — PR #34169 not merged. Must stay on Ray.
 **SGLang for FP8 (Mar 2026):** Not viable — CUTLASS FP8 broken on sm_121a, no Marlin workaround equivalent.
 **Health check caution:** Inference-based probes can create stale requests that trigger DAG wedges. Prefer metrics-gated checks (`/metrics`).
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
 **No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
+
+**Crash forensics checklist (BEFORE container cleanup):**
+1. `docker inspect <c> --format '{{json .State}}'` (OOMKilled field)
+2. `docker logs <c> > /tmp/<c>-$(date +%s).log 2>&1`
+3. `journalctl -k --since "1 hour ago" | grep -iE "oom|killed|segfault"`
+4. Copy `/tmp/nccl.*.log` from container if NCCL debug was enabled
 
 ### Head vs Worker Clock Speeds
 
@@ -506,6 +523,16 @@ budget with WAITING request prefills. No artificial serialization.
 **Usage:** `./run-recipe.sh recipes/<name>.yaml --setup -n <head-ip>,<worker-ip> -d`
 **122B recipe:** `qwen3.5-122b-int4-autoround.yaml` — Ray TP=2, fastsafetensors, tf5, Marlin atomic add.
 **Build:** Compiles vLLM + FlashInfer from source for sm_121a. Downloads prebuilt FlashInfer wheels from GitHub releases.
+
+### Community Dual-Spark Stability (Mar 2026)
+
+- **Build identity > NCCL tuning.** Freeze exact vLLM/FlashInfer versions.
+- **FP8 has better TP=2 reports** than AWQ for 122B on dual-Spark.
+- Working: persistent caches, `VLLM_USE_AOT_COMPILE=1`, `flashinfer`, `fastsafetensors`, prefix caching.
+- **~50s first-request delay** (lazy DAG init). Send warmup request after launch.
+- AutoRound needs `spark-vllm-docker` mods + `VLLM_MARLIN_USE_ATOMIC_ADD=1`.
+- **vLLM replacing Ray executor** upstream (Compiled Graph instability).
+- Stable paths: single-node quantized, or native headless DP (no Ray).
 
 ### Recovery (Feb 2026)
 
