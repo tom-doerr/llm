@@ -456,7 +456,7 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 **SGLang for FP8 (Mar 2026):** Not viable — CUTLASS FP8 broken on sm_121a, no Marlin workaround equivalent.
 **Health check caution:** Inference-based probes can create stale requests that trigger DAG wedges. Prefer metrics-gated checks (`/metrics`).
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
-**No swap on spark-2:** Need `sudo swapon /swap.img` + zram-generator.
+**Swap on spark-2/spark-3:** 64GB zram (zstd, priority 100) + 256GB NVMe `/swap.img` (priority -2). Config: `/etc/systemd/zram-generator.conf`. Swappiness=200 (persistent via `/etc/sysctl.d/99-swappiness.conf`).
 
 **Crash forensics checklist (BEFORE container cleanup):**
 1. `docker inspect <c> --format '{{json .State}}'` (OOMKilled field)
@@ -503,7 +503,8 @@ budget with WAITING request prefills. No artificial serialization.
 
 **TP=2 stability:** Crashes ~40-57 min (compiled DAG deadlock, Ray #58426). DAG bypass patch delays but doesn't fully prevent crashes (~48 min SIGSEGV/OOM).
 
-**PP broken:** DAG bypass passes tuples, PP expects dicts. Only TP works with bypass.
+**PP=2 FP8 (Mar 2026, WORKING):** `./start-vllm-multinode.sh --pp` with native compiled DAG (NOT DAG bypass). Script auto-disables `VLLM_RAY_NO_COMPILED_DAG` for PP mode. Encoder replicated on both PP stages (only PP rank 0 runs it). Peak **211 dec/s** at c=32, but c=1 is slow (1.6 tok/s, 20s latency — pipeline bubble overhead).
+**PP + DAG bypass broken:** DAG bypass passes tuples, PP expects dicts. Only TP works with bypass.
 
 **DP local-only limitation:** `--data-parallel-size 2` without extra flags spawns both engines locally. 122B FP8 OOMs (119 GiB > 128 GiB UMA).
 
@@ -572,15 +573,15 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 
 Peak: **493 dec tok/s** at c=256.
 
-## Qwen3.5-122B-A10B-FP8 (Feb 2026)
+## Qwen3.5-122B-A10B-FP8 (Mar 2026)
 
-**Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker).
+**Status:** RUNNING on vLLM PP=2, spark-2 (head) + spark-3 (worker).
 **Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:cu130-nightly` (v0.16.1rc1.dev111)
 **Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.110.2:8000/v1`
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** `VLLM_TEST_FORCE_FP8_MARLIN=1` — CUTLASS crashes on sm_121a.
-**Memory:** 59.1 GiB/node, 0.70 util, no FP8 KV (disabled). KV cache: 471K tokens (21.77 GiB/node).
+**Memory:** 59.5-60.9 GiB/node, 0.70 util, no FP8 KV (disabled). KV cache: 450K tokens (23.9 GiB/node).
 **Multimodal:** Images enabled (`--limit-mm-per-prompt '{"video": 0}'`). Video disabled.
 **Encoder cache:** 16K tokens (nightly default). `VLLM_ENCODER_CACHE_TOKENS` removed (nightly ignores it).
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
@@ -597,6 +598,18 @@ Peak: **493 dec tok/s** at c=256.
 | 2048×2048 | 128 | crash | crash | crash |
 
 Peak: **910 tok/s** at 1024×1024 c=32. 2048×2048 c>=8 crashes (Ray timeout).
+
+**PP=2 benchmark (Mar 2026 - enforce-eager, native compiled DAG, single-rail RDMA):**
+
+| Concurrency | dec/s | p50 |
+|-------------|-------|-----|
+| 1 | 1.6 | 20.2s |
+| 4 | 54.7 | 2.3s |
+| 32 | **211.2** | 4.8s |
+| 64 | 187.0 | 8.2s |
+| 256 | 194.1 | 23.8s |
+
+Peak: **211 dec/s** at c=32. c=1 slow due to pipeline bubble. Stability: passed initial benchmark without crashes.
 
 ## Qwen3.5-122B-A10B Intel AutoRound int4 (Mar 2026)
 

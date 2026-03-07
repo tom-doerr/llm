@@ -28,7 +28,11 @@ ENV="$ENV -e RAY_memory_monitor_refresh_ms=0"
 ENV="$ENV -e HF_HUB_OFFLINE=1"
 ENV="$ENV -e VLLM_SLEEP_WHEN_IDLE=0"  # Disabled: stale requests prevent wake-up, causing hung requests
 ENV="$ENV -e OMP_NUM_THREADS=1"  # Reduce threading overhead
-ENV="$ENV -e VLLM_RAY_NO_COMPILED_DAG=1"  # Bypass compiled DAG (Ray #58426 deadlock)
+if [ "$USE_PP" = "1" ]; then
+  ENV="$ENV -e VLLM_RAY_NO_COMPILED_DAG=0"  # PP needs native compiled DAG (bypass sends tuples, PP expects dicts)
+else
+  ENV="$ENV -e VLLM_RAY_NO_COMPILED_DAG=1"  # Bypass compiled DAG for TP (Ray #58426 deadlock)
+fi
 # PyTorch NCCL flight recorder (forensic data on stalls)
 ENV="$ENV -e TORCH_NCCL_TRACE_BUFFER_SIZE=2000"
 ENV="$ENV -e TORCH_NCCL_DUMP_ON_TIMEOUT=1"
