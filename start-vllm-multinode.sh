@@ -93,8 +93,9 @@ elif [ "$USE_PP" = "1" ]; then
 else
   echo "Mode: Tensor Parallel (TP=2)"
   VLLM_ARGS="--tensor-parallel-size 2 --trust-remote-code"
+  VLLM_ARGS="$VLLM_ARGS --mm-encoder-tp-mode data"  # Batch-level encoder DP across TP ranks
 fi
-VLLM_ARGS="$VLLM_ARGS --gpu-memory-utilization ${GPU_MEM_UTIL:-0.70}"
+VLLM_ARGS="$VLLM_ARGS --gpu-memory-utilization ${GPU_MEM_UTIL:-0.60}"
 # VLLM_ARGS="$VLLM_ARGS --kv-cache-dtype fp8"  # Disabled: suspected cause of hard crashes on Spark
 VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 4096"
 VLLM_ARGS="$VLLM_ARGS --distributed-executor-backend ray"
