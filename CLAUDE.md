@@ -501,10 +501,11 @@ budget with WAITING request prefills. No artificial serialization.
 **PP mode:** `./start-vllm-multinode.sh --pp` - Pipeline parallel, layers split across GPUs
 **DP mode:** `./start-vllm-multinode.sh --dp` - Data parallel, full model per node
 
-**TP=2 stability:** Crashes ~40-57 min (compiled DAG deadlock, Ray #58426). DAG bypass patch delays but doesn't fully prevent crashes (~48 min SIGSEGV/OOM).
+**TP=2 stability:** Crashes ~6-57 min (compiled DAG deadlock, Ray #58426). DAG bypass delays but doesn't prevent crashes.
 
-**PP=2 FP8 (Mar 2026, WORKING):** `./start-vllm-multinode.sh --pp` with native compiled DAG (NOT DAG bypass). Script auto-disables `VLLM_RAY_NO_COMPILED_DAG` for PP mode. Encoder replicated on both PP stages (only PP rank 0 runs it). Peak **211 dec/s** at c=32, but c=1 is slow (1.6 tok/s, 20s latency — pipeline bubble overhead).
+**PP=2 FP8 (Mar 2026, UNSTABLE):** Crashes every 2-12h. Compiled DAG desync: head sends N tokens, worker gets M<N → `sync_and_slice_intermediate_tensors` shape mismatch. Same DAG bug as TP, different symptom. Peak 211 dec/s at c=32, c=1 slow (1.6 tok/s).
 **PP + DAG bypass broken:** DAG bypass passes tuples, PP expects dicts. Only TP works with bypass.
+**Multi-node summary:** ALL strategies unstable — TP (minutes), PP (hours), DP+MoE EP (minutes). Single-node only stable path.
 
 **DP local-only limitation:** `--data-parallel-size 2` without extra flags spawns both engines locally. 122B FP8 OOMs (119 GiB > 128 GiB UMA).
 
