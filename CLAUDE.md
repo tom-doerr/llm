@@ -293,6 +293,11 @@ vllm serve QuantTrio/Qwen3-VL-235B-A22B-Thinking-AWQ \
 
 **Video disabled:** `--limit-mm-per-prompt '{"video": 0}'` saves ~4GB KV (17GB vs 13GB per node). Encoder cache 16K tokens vs 153K with video.
 
+**`--limit-mm-per-prompt` extended format:** Supports width/height profiling hints (affect memory reservation, not runtime caps):
+`'{"image":{"count":16,"width":768,"height":768},"video":0}'`. Default limit is 999 per modality.
+
+**`--disable-chunked-mm-input`:** Prevents multimodal items from being partially scheduled across chunked-prefill steps. Stability lever for multimodal.
+
 **VLM encoder profiling:** ~5 min with video disabled, ~1 hour with video enabled.
 
 **VLLM_USE_RAY_COMPILED_DAG=0:** Doesn't work - vLLM V1 forces it to 1 for multi-node.
@@ -503,7 +508,7 @@ budget with WAITING request prefills. No artificial serialization.
 
 **TP=2 stability:** Crashes ~6-57 min (compiled DAG deadlock, Ray #58426). DAG bypass delays but doesn't prevent crashes.
 
-**PP=2 FP8 (Mar 2026, UNSTABLE):** Crashes every 2-12h. Compiled DAG desync: head sends N tokens, worker gets M<N → `sync_and_slice_intermediate_tensors` shape mismatch. Same DAG bug as TP, different symptom. Peak 211 dec/s at c=32, c=1 slow (1.6 tok/s).
+**PP=2 FP8 (Mar 2026, UNSTABLE):** Crashes every 2-12h. Compiled DAG stage desync → `sync_and_slice_intermediate_tensors` shape mismatch on worker. Crash was on decode-only step with `has_structured_output_requests=true` (possible crash multiplier). Tested on patched `ray_executor.py`, not clean upstream. v0.17.0 has PP fixes — retest before generalizing. Peak 211 dec/s at c=32, c=1 slow (1.6 tok/s).
 **PP + DAG bypass broken:** DAG bypass passes tuples, PP expects dicts. Only TP works with bypass.
 **Multi-node summary:** ALL strategies unstable — TP (minutes), PP (hours), DP+MoE EP (minutes). Single-node only stable path.
 
@@ -533,7 +538,8 @@ budget with WAITING request prefills. No artificial serialization.
 - Working: persistent caches, `VLLM_USE_AOT_COMPILE=1`, `flashinfer`, `fastsafetensors`, prefix caching.
 - **~50s first-request delay** (lazy DAG init). Send warmup request after launch.
 - AutoRound needs `spark-vllm-docker` mods + `VLLM_MARLIN_USE_ATOMIC_ADD=1`.
-- **vLLM replacing Ray executor** upstream (Compiled Graph instability).
+- **vLLM replacing Ray executor** upstream (RFC #35848, Compiled Graph instability).
+- **v0.17.0 released Mar 7, 2026** with PP fixes + tools/response_format crash fix. Upgrade candidate.
 - Stable paths: single-node quantized, or native headless DP (no Ray).
 
 ### Recovery (Feb 2026)
