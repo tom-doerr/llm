@@ -539,7 +539,11 @@ budget with WAITING request prefills. No artificial serialization.
 - **~50s first-request delay** (lazy DAG init). Send warmup request after launch.
 - AutoRound needs `spark-vllm-docker` mods + `VLLM_MARLIN_USE_ATOMIC_ADD=1`.
 - **vLLM replacing Ray executor** upstream (RFC #35848, Compiled Graph instability).
-- **v0.17.0 released Mar 7, 2026** with PP fixes + tools/response_format crash fix. Upgrade candidate.
+- **v0.17.0 released Mar 7, 2026** with PP fixes, tools/response_format crash fix, MRV2 milestone (not yet feature-complete).
+- **Qwen3.5 recipe still recommends `cu130-nightly`** on Spark/Blackwell, not stable tag.
+- **Community 35B:** 50 tok/s, 1M context (YaRN), 60h stable on custom build with fastsafetensors.
+- **v0.17.0 edge case:** `tool_choice="auto"` returns 400 with hermes parser on Spark.
+- **SGLang Qwen3.5 bug tracker (Mar 7):** PP broken, concurrent crash/memory leak, AWQ/NVFP4 bugs.
 - Stable paths: single-node quantized, or native headless DP (no Ray).
 
 ### Recovery (Feb 2026)
