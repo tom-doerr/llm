@@ -454,7 +454,7 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 **Fix (Mar 2026):** `VLLM_RAY_NO_COMPILED_DAG=1` — patched `ray_executor.py` to use direct `.remote()` calls instead of compiled DAG. Keeps Ray for coordination but bypasses the deadlock-prone DAG graph. Patch applied via SCP + entrypoint copy at container start. Throughput: ~21 tok/s decode (comparable to compiled DAG). **Note:** This env var was removed in v0.17.0.
 **Result:** No more DAG deadlocks. Worker still crashes at ~27-48 min (NCCL timeout / SIGSEGV).
 **DP=2 also unstable:** MoE models use EP (Expert Parallel) over NCCL even in DP mode → same crash pattern (~24 min).
-**Single-node 122B int4 is the stable deployment.** Multi-node remains unstable for all executor backends.
+**Single-node 122B int4 was the stable deployment.** Multi-node TP=2 now stable with spark-vllm-docker (native sm_121a, Mar 10 2026).
 **Exit 137 ≠ OOM proven:** 137=SIGKILL, could be OOM, docker kill, or failed shutdown. Need `docker inspect --format '{{json .State.OOMKilled}}'` + `journalctl -k | grep oom` to confirm.
 **NCCL flight recorder:** `TORCH_NCCL_TRACE_BUFFER_SIZE=2000`, `TORCH_NCCL_DUMP_ON_TIMEOUT=1`, `TORCH_NCCL_DESYNC_DEBUG=1` — forensic data on stalls.
 **mp backend NOT viable for multi-node TP (Mar 2026):** Broken in v0.17.0 too — NOT just the aarch64 SHM bug (#33628). Real issue: `_init_message_queues` in `multiproc_executor.py` runs before `_INNER_DP_WORLD` is initialized in `init_device()`. mp multi-node only works for headless DP mode, not TP across nodes.
@@ -597,6 +597,8 @@ Peak: **493 dec tok/s** at c=256.
 **Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
+**Stability:** Extremely stable with spark-vllm-docker (native sm_121a). Previous stock v0.17.0 crashed in 6-57 min.
+**Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. With 4 GB free at 1.5 GB/hr total drain, expect swap pressure after ~3 hours. Swap (320 GB, swappiness=200) provides long runway. Not a stability risk, just gradual RAM pressure.
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
 
