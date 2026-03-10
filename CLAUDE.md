@@ -746,9 +746,11 @@ Can be dramatically faster. May OOM in TP scenarios.
 **Metrics:** Queries use `or` to show both `vllm:` and `llamacpp:` prefixes.
 Whichever server runs on :8000 gets scraped automatically.
 
-**Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100, dcgm :9400
+**Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100 (spark-1/2/3), dcgm :9400
 
-**Config files:** `prometheus.yml`, `systemd/node-exporter.service`
+**RDMA panel:** Uses `node_infiniband_port_data_*` (RDMA verbs counters), not `node_network_*` (Ethernet). Dual-rail aggregate per node.
+
+**Config files:** `~/.config/prometheus/prometheus.yml` (actual), `prometheus.yml` (repo copy). `systemd/node-exporter.service`
 
 **Export:** `curl -s -u admin:admin123 http://localhost:3000/api/dashboards/uid/vllm-spark | jq '.dashboard' > grafana/vllm-dashboard.json`
 

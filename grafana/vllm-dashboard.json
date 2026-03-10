@@ -802,13 +802,30 @@
       "id": 18,
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_TEMP",
-          "legendFormat": "GPU Temp",
+          "expr": "node_hwmon_temp_celsius{instance=~\"spark-2.*\",chip=\"thermal_thermal_zone0\",sensor=\"temp1\"}",
+          "legendFormat": "spark-2 SoC",
           "refId": "A"
+        },
+        {
+          "expr": "node_hwmon_temp_celsius{instance=~\"spark-3.*\",chip=\"thermal_thermal_zone0\",sensor=\"temp1\"}",
+          "legendFormat": "spark-3 SoC",
+          "refId": "B"
         }
       ],
-      "title": "GPU Temperature (spark-2)",
+      "title": "SoC Temperature",
       "type": "gauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "cfagbva82okjkf"},
+      "fieldConfig": {"defaults": {"custom": {"lineWidth": 1, "fillOpacity": 10, "spanNulls": true}, "unit": "celsius"}},
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 40},
+      "id": 22,
+      "targets": [
+        {"expr": "node_hwmon_temp_celsius{instance=~\"spark-2.*\",chip=\"thermal_thermal_zone0\",sensor=\"temp1\"}", "legendFormat": "spark-2", "refId": "A"},
+        {"expr": "node_hwmon_temp_celsius{instance=~\"spark-3.*\",chip=\"thermal_thermal_zone0\",sensor=\"temp1\"}", "legendFormat": "spark-3", "refId": "B"}
+      ],
+      "title": "SoC Temperature History",
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -825,7 +842,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 56
       },
       "id": 19,
       "targets": [
@@ -873,7 +890,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 56
       },
       "id": 20,
       "targets": [
@@ -913,58 +930,29 @@
       },
       "fieldConfig": {
         "defaults": {
+          "custom": {"lineWidth": 1, "fillOpacity": 15, "spanNulls": true},
           "min": 0,
-          "unit": "Bps"
+          "unit": "binBps"
         }
       },
       "gridPos": {
-        "h": 4,
-        "w": 12,
+        "h": 8,
+        "w": 24,
         "x": 0,
         "y": 48
       },
       "id": 21,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      },
       "targets": [
-        {
-          "expr": "avg_over_time(sum(rate(node_network_receive_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s]))[$__range:])",
-          "instant": true,
-          "legendFormat": "Avg RX",
-          "refId": "A"
-        },
-        {
-          "expr": "max_over_time(sum(rate(node_network_receive_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s]))[$__range:])",
-          "instant": true,
-          "legendFormat": "Peak RX",
-          "refId": "B"
-        },
-        {
-          "expr": "avg_over_time(sum(rate(node_network_transmit_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s]))[$__range:])",
-          "instant": true,
-          "legendFormat": "Avg TX",
-          "refId": "C"
-        },
-        {
-          "expr": "max_over_time(sum(rate(node_network_transmit_bytes_total{instance=~\"spark-2.*\",device=~\"enp1s0f1np1|enP2p1s0f1np1\"}[30s]))[$__range:])",
-          "instant": true,
-          "legendFormat": "Peak TX",
-          "refId": "D"
-        }
+        {"expr": "sum(rate(node_infiniband_port_data_transmitted_bytes_total{instance=~\"spark-2.*\",device=~\"rocep1s0f1|roceP2p1s0f1\"}[1m]))", "legendFormat": "spark-2 TX", "refId": "A"},
+        {"expr": "sum(rate(node_infiniband_port_data_received_bytes_total{instance=~\"spark-2.*\",device=~\"rocep1s0f1|roceP2p1s0f1\"}[1m]))", "legendFormat": "spark-2 RX", "refId": "B"},
+        {"expr": "sum(rate(node_infiniband_port_data_transmitted_bytes_total{instance=~\"spark-3.*\",device=~\"rocep1s0f1|roceP2p1s0f1\"}[1m]))", "legendFormat": "spark-3 TX", "refId": "C"},
+        {"expr": "sum(rate(node_infiniband_port_data_received_bytes_total{instance=~\"spark-3.*\",device=~\"rocep1s0f1|roceP2p1s0f1\"}[1m]))", "legendFormat": "spark-3 RX", "refId": "D"}
       ],
-      "title": "Network Stats (spark-2 RDMA)",
-      "type": "stat"
+      "title": "RDMA Throughput (dual-rail aggregate)",
+      "type": "timeseries"
     },
-    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":0,"y":56},"id":22,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"increase(vllm:prompt_tokens_total[24h]) or increase(llamacpp:prompt_tokens_total[24h])","instant":true,"legendFormat":"Encode","refId":"A"}],"title":"Encode Tokens (24h)","type":"stat"},
-    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":12,"y":56},"id":23,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"increase(vllm:generation_tokens_total[24h]) or increase(llamacpp:tokens_predicted_total[24h])","instant":true,"legendFormat":"Decode","refId":"A"}],"title":"Decode Tokens (24h)","type":"stat"}
+    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":0,"y":64},"id":22,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"increase(vllm:prompt_tokens_total[24h]) or increase(llamacpp:prompt_tokens_total[24h])","instant":true,"legendFormat":"Encode","refId":"A"}],"title":"Encode Tokens (24h)","type":"stat"},
+    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":12,"y":64},"id":23,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"increase(vllm:generation_tokens_total[24h]) or increase(llamacpp:tokens_predicted_total[24h])","instant":true,"legendFormat":"Decode","refId":"A"}],"title":"Decode Tokens (24h)","type":"stat"}
   ],
   "refresh": "5s",
   "schemaVersion": 39,
