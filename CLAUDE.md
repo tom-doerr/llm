@@ -245,7 +245,7 @@ Container: `nvcr.io/nvidia/vllm:25.11-py3`
 
 **VERIFIED WORKING (Jan 2026):** ~3 min model load, ~5s TTFT
 
-**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM across spark-2/spark-3, dual-rail RDMA, mounts custom vLLM with async encoder)
+**Startup script:** `./start-vllm-multinode.sh` (deploys Ray + vLLM v0.17.0 across spark-2/spark-3, dual-rail RDMA, mounts custom vLLM with async encoder)
 
 Docs: https://build.nvidia.com/spark/vllm/stacked-sparks
 
@@ -451,13 +451,13 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 **Hard crash (Mar 2026):** spark-2 crashed 4+ times under CUDA load — full machine unresponsive (all interfaces down, requires physical power cycle). FP8 KV cache disabled but crashes continue. Also triggered by single-node 122B at 0.85 gpu-memory-utilization (62.65 GiB model on 128 GiB UMA — too aggressive). Use 0.70 max for 122B single-node.
 
 **Compiled DAG deadlock:** V1 forces compiled DAG on. Worker crashes after ~40 min regardless of model size (tested with 35B and 122B). Not cable/GID related — pure software issue (Ray #58426).
-**Fix (Mar 2026):** `VLLM_RAY_NO_COMPILED_DAG=1` — patched `ray_executor.py` to use direct `.remote()` calls instead of compiled DAG. Keeps Ray for coordination but bypasses the deadlock-prone DAG graph. Patch applied via SCP + entrypoint copy at container start. Throughput: ~21 tok/s decode (comparable to compiled DAG).
+**Fix (Mar 2026):** `VLLM_RAY_NO_COMPILED_DAG=1` — patched `ray_executor.py` to use direct `.remote()` calls instead of compiled DAG. Keeps Ray for coordination but bypasses the deadlock-prone DAG graph. Patch applied via SCP + entrypoint copy at container start. Throughput: ~21 tok/s decode (comparable to compiled DAG). **Note:** This env var was removed in v0.17.0.
 **Result:** No more DAG deadlocks. Worker still crashes at ~27-48 min (NCCL timeout / SIGSEGV).
 **DP=2 also unstable:** MoE models use EP (Expert Parallel) over NCCL even in DP mode → same crash pattern (~24 min).
 **Single-node 122B int4 is the stable deployment.** Multi-node remains unstable for all executor backends.
 **Exit 137 ≠ OOM proven:** 137=SIGKILL, could be OOM, docker kill, or failed shutdown. Need `docker inspect --format '{{json .State.OOMKilled}}'` + `journalctl -k | grep oom` to confirm.
 **NCCL flight recorder:** `TORCH_NCCL_TRACE_BUFFER_SIZE=2000`, `TORCH_NCCL_DUMP_ON_TIMEOUT=1`, `TORCH_NCCL_DESYNC_DEBUG=1` — forensic data on stalls.
-**mp backend NOT viable (Mar 2026):** SHM bug (#33628) on aarch64 multi-node — PR #34169 not merged. Must stay on Ray.
+**mp backend NOT viable for multi-node TP (Mar 2026):** Broken in v0.17.0 too — NOT just the aarch64 SHM bug (#33628). Real issue: `_init_message_queues` in `multiproc_executor.py` runs before `_INNER_DP_WORLD` is initialized in `init_device()`. mp multi-node only works for headless DP mode, not TP across nodes.
 **SGLang for FP8 (Mar 2026):** Not viable — CUTLASS FP8 broken on sm_121a, no Marlin workaround equivalent.
 **Health check caution:** Inference-based probes can create stale requests that trigger DAG wedges. Prefer metrics-gated checks (`/metrics`).
 **Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
@@ -528,8 +528,9 @@ budget with WAITING request prefills. No artificial serialization.
 **Repo:** `eugr/spark-vllm-docker` — community YAML "one-click deploy" recipes for DGX Spark.
 **Local clone:** `/home/tom/llm/spark-vllm-docker/` (spark-1), `~/spark-vllm-docker/` (spark-2)
 **Usage:** `./run-recipe.sh recipes/<name>.yaml --setup -n <head-ip>,<worker-ip> -d`
-**122B recipe:** `qwen3.5-122b-int4-autoround.yaml` — Ray TP=2, fastsafetensors, tf5, Marlin atomic add.
-**Build:** Compiles vLLM + FlashInfer from source for sm_121a. Downloads prebuilt FlashInfer wheels from GitHub releases.
+**122B recipes:** `qwen3.5-122b-fp8.yaml` (FP8, current), `qwen3.5-122b-int4-autoround.yaml` (int4).
+**Build:** Downloads prebuilt wheels from GitHub releases. Falls back to compiling from source for sm_121a.
+**IB override:** autodiscover picks all 4 ports — must override `--ib-if` to port 1 only for spark-2↔spark-3.
 
 ### Community Dual-Spark Stability (Mar 2026)
 
@@ -538,7 +539,7 @@ budget with WAITING request prefills. No artificial serialization.
 - Working: persistent caches, `VLLM_USE_AOT_COMPILE=1`, `flashinfer`, `fastsafetensors`, prefix caching.
 - **~50s first-request delay** (lazy DAG init). Send warmup request after launch.
 - AutoRound needs `spark-vllm-docker` mods + `VLLM_MARLIN_USE_ATOMIC_ADD=1`.
-- **vLLM replacing Ray executor** upstream (RFC #35848, Compiled Graph instability).
+- **vLLM replacing Ray executor** upstream (RFC #35848, Compiled Graph instability). v0.17.0 mp backend doesn't support multi-node TP (only headless DP).
 - **v0.17.0 released Mar 7, 2026** with PP fixes, tools/response_format crash fix, MRV2 milestone (not yet feature-complete).
 - **Qwen3.5 recipe still recommends `cu130-nightly`** on Spark/Blackwell, not stable tag.
 - **Community 35B:** 50 tok/s, 1M context (YaRN), 60h stable on custom build with fastsafetensors.
@@ -586,15 +587,15 @@ Peak: **493 dec tok/s** at c=256.
 
 ## Qwen3.5-122B-A10B-FP8 (Mar 2026)
 
-**Status:** RUNNING on vLLM PP=2, spark-2 (head) + spark-3 (worker).
-**Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm/vllm-openai:cu130-nightly` (v0.16.1rc1.dev111)
-**Script:** `./start-vllm-multinode.sh` | **API:** `http://192.168.110.2:8000/v1`
+**Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker).
+**Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm-node` (spark-vllm-docker, native sm_121a)
+**Deploy:** `spark-vllm-docker/launch-cluster.sh` with `launch-122b-fp8.sh` | **API:** `http://192.168.110.2:8000/v1`
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
-**MoE:** `VLLM_TEST_FORCE_FP8_MARLIN=1` — CUTLASS crashes on sm_121a.
-**Memory:** 59.5-60.9 GiB/node, 0.70 util, no FP8 KV (disabled). KV cache: 450K tokens (23.9 GiB/node).
-**Multimodal:** Images enabled (`--limit-mm-per-prompt '{"video": 0}'`). Video disabled.
-**Encoder cache:** 16K tokens (nightly default). `VLLM_ENCODER_CACHE_TOKENS` removed (nightly ignores it).
+**MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
+**Memory:** 0.70 util, KV cache 21.14 GiB/node. CUDA graphs: PIECEWISE (no enforce-eager).
+**Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA.
+**Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
