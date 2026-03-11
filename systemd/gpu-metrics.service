@@ -1,0 +1,11 @@
+[Unit]
+Description=GPU metrics for node_exporter textfile collector
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/llm/gpu-metrics.sh
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/node_exporter --web.listen-address=:9100
+ExecStart=%h/.local/bin/node_exporter --web.listen-address=:9100 --collector.textfile.directory=%h/.local/share/node_exporter/textfile
 Restart=on-failure
 
 [Install]

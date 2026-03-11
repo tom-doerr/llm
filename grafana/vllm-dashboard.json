@@ -655,8 +655,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "Power W"
+              "id": "byRegexp",
+              "options": ".*Power W"
             },
             "properties": [
               {
@@ -684,17 +684,27 @@
       "id": 15,
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_UTIL",
-          "legendFormat": "GPU %",
+          "expr": "node_gpu_utilization_percent{instance=~\"spark-2.*\"}",
+          "legendFormat": "spark-2 GPU %",
           "refId": "A"
         },
         {
-          "expr": "DCGM_FI_DEV_POWER_USAGE",
-          "legendFormat": "Power W",
+          "expr": "node_gpu_utilization_percent{instance=~\"spark-3.*\"}",
+          "legendFormat": "spark-3 GPU %",
           "refId": "B"
+        },
+        {
+          "expr": "node_gpu_power_watts{instance=~\"spark-2.*\"}",
+          "legendFormat": "spark-2 Power W",
+          "refId": "C"
+        },
+        {
+          "expr": "node_gpu_power_watts{instance=~\"spark-3.*\"}",
+          "legendFormat": "spark-3 Power W",
+          "refId": "D"
         }
       ],
-      "title": "GPU Utilization & Power (spark-2)",
+      "title": "GPU Utilization & Power",
       "type": "timeseries"
     },
     {
@@ -719,16 +729,26 @@
       "targets": [
         {
           "expr": "100 - (avg by(instance) (irate(node_cpu_seconds_total{mode=\"idle\",instance=~\"spark-2.*\"}[1m])) * 100)",
-          "legendFormat": "CPU %",
+          "legendFormat": "spark-2 CPU %",
           "refId": "A"
         },
         {
-          "expr": "(1 - node_memory_MemAvailable_bytes{instance=~\"spark-2.*\"} / node_memory_MemTotal_bytes{instance=~\"spark-2.*\"}) * 100",
-          "legendFormat": "RAM %",
+          "expr": "100 - (avg by(instance) (irate(node_cpu_seconds_total{mode=\"idle\",instance=~\"spark-3.*\"}[1m])) * 100)",
+          "legendFormat": "spark-3 CPU %",
           "refId": "B"
+        },
+        {
+          "expr": "(1 - node_memory_MemAvailable_bytes{instance=~\"spark-2.*\"} / node_memory_MemTotal_bytes{instance=~\"spark-2.*\"}) * 100",
+          "legendFormat": "spark-2 RAM %",
+          "refId": "C"
+        },
+        {
+          "expr": "(1 - node_memory_MemAvailable_bytes{instance=~\"spark-3.*\"} / node_memory_MemTotal_bytes{instance=~\"spark-3.*\"}) * 100",
+          "legendFormat": "spark-3 RAM %",
+          "refId": "D"
         }
       ],
-      "title": "CPU & Memory (spark-2)",
+      "title": "CPU & Memory",
       "type": "timeseries"
     },
     {
@@ -951,8 +971,9 @@
       "title": "RDMA Throughput (dual-rail aggregate)",
       "type": "timeseries"
     },
-    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":0,"y":64},"id":22,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"increase(vllm:prompt_tokens_total[24h]) or increase(llamacpp:prompt_tokens_total[24h])","instant":true,"legendFormat":"Encode","refId":"A"}],"title":"Encode Tokens (24h)","type":"stat"},
-    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":12,"y":64},"id":23,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"increase(vllm:generation_tokens_total[24h]) or increase(llamacpp:tokens_predicted_total[24h])","instant":true,"legendFormat":"Decode","refId":"A"}],"title":"Decode Tokens (24h)","type":"stat"}
+    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":6,"x":0,"y":64},"id":22,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"vllm:prompt_tokens_total or llamacpp:prompt_tokens_total","legendFormat":"Total","refId":"A"},{"expr":"increase(vllm:prompt_tokens_total[24h]) or increase(llamacpp:prompt_tokens_total[24h])","instant":true,"legendFormat":"24h","refId":"B"}],"title":"Encode Tokens","type":"stat"},
+    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":6,"x":6,"y":64},"id":24,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"vllm:prompt_tokens_cached_total","legendFormat":"Total","refId":"A"},{"expr":"increase(vllm:prompt_tokens_cached_total[24h])","instant":true,"legendFormat":"24h","refId":"B"}],"title":"Cached Encode","type":"stat"},
+    {"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"short"}},"gridPos":{"h":4,"w":12,"x":12,"y":64},"id":23,"options":{"colorMode":"value","graphMode":"area","reduceOptions":{"calcs":["lastNotNull"]}},"targets":[{"expr":"vllm:generation_tokens_total or llamacpp:tokens_predicted_total","legendFormat":"Total","refId":"A"},{"expr":"increase(vllm:generation_tokens_total[24h]) or increase(llamacpp:tokens_predicted_total[24h])","instant":true,"legendFormat":"24h","refId":"B"}],"title":"Decode Tokens","type":"stat"}
   ],
   "refresh": "5s",
   "schemaVersion": 39,

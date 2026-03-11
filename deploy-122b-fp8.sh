@@ -11,6 +11,9 @@ if [ "${1:-}" = "stop" ]; then
     echo "Stopped."; exit 0
 fi
 
+# Sync launch script to spark-2
+scp "$(dirname "$0")/launch-122b-fp8.sh" spark-2:~/spark-vllm-docker/launch-122b-fp8.sh
+
 # Clean restart
 ssh spark-2 'docker rm -f vllm_node 2>/dev/null' || true
 ssh spark-3 'docker rm -f vllm_node 2>/dev/null' || true
