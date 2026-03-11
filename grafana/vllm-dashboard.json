@@ -376,7 +376,7 @@
             "uid": "cfagbva82okjkf"
           },
           "expr": "sum(rate(vllm:prompt_tokens_total[30s])) or sum(rate(llamacpp:prompt_tokens_total[30s]))",
-          "legendFormat": "Prompt tok/s (incl cache)",
+          "legendFormat": "Prompt tok/s (total)",
           "refId": "B"
         },
         {
@@ -384,7 +384,7 @@
             "type": "prometheus",
             "uid": "cfagbva82okjkf"
           },
-          "expr": "sum(rate(vllm:prefix_cache_queries_total[30s])) - sum(rate(vllm:prefix_cache_hits_total[30s]))",
+          "expr": "sum(rate(vllm:prompt_tokens_total[30s])) - sum(rate(vllm:prompt_tokens_cached_total[30s]))",
           "legendFormat": "Prefill tok/s (non-cached)",
           "refId": "C"
         },
