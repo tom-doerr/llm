@@ -1,0 +1,11 @@
+[Unit]
+Description=vLLM watchdog - auto-recovery with crash forensics
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/llm/vllm-watchdog.sh 60 3
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

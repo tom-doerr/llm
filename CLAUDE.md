@@ -460,7 +460,7 @@ Both nodes draw 60-85W idle. Inherent to keeping RDMA connection "hot".
 **mp backend NOT viable for multi-node TP (Mar 2026):** Broken in v0.17.0 too — NOT just the aarch64 SHM bug (#33628). Real issue: `_init_message_queues` in `multiproc_executor.py` runs before `_INNER_DP_WORLD` is initialized in `init_device()`. mp multi-node only works for headless DP mode, not TP across nodes.
 **SGLang for FP8 (Mar 2026):** Not viable — CUTLASS FP8 broken on sm_121a, no Marlin workaround equivalent.
 **Health check caution:** Inference-based probes can create stale requests that trigger DAG wedges. Prefer metrics-gated checks (`/metrics`).
-**Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` (5 min test, restart after 2 fails, URL: `192.168.110.2`).
+**Docker:** `--restart=no`. **Watchdog:** `vllm-watchdog.sh` on spark-1 (60s poll, redeploy after 3 fails). Saves crash forensics to `crash-logs/<timestamp>/` before redeploy. Systemd: `vllm-watchdog.service`.
 **Swap on spark-2/spark-3:** 64GB zram (zstd, priority 100) + 256GB NVMe `/swap.img` (priority -2). Config: `/etc/systemd/zram-generator.conf`. Swappiness=200 (persistent via `/etc/sysctl.d/99-swappiness.conf`).
 
 **Crash forensics checklist (BEFORE container cleanup):**
@@ -488,15 +488,11 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 
 ### Scheduler Tuning
 
-**`max_num_batched_tokens`:** Set to 4096 (Feb 2026). Higher values (16384, 32768) caused NVIDIA driver OOM under load on unified memory.
-Cached tokens count against budget but cost no compute — higher helps concurrency but risks OOM.
+**`max_num_batched_tokens`:** Set to 8192. Tried 16384 (Mar 2026, KV cache -6%) but reverted. Old OOM issues were on stock v0.17.0-cu130; native build handled 16384 fine but reverted for stability.
 
-**`max_num_partial_prefills`:** Default 1. **Dead code in vLLM V1 0.11.0** — the V1 scheduler
-does NOT reference this setting. Mixed prefill (prefill + decode in same step) works by default.
-The scheduler schedules all RUNNING requests first (1 decode token each), then fills remaining
-budget with WAITING request prefills. No artificial serialization.
+**`max_num_partial_prefills`:** Default 1. Hardcoded check in spark-vllm-docker build rejects >1 ("Concurrent Partial Prefill is not supported"). Cannot increase without newer vLLM.
 
-**Note:** Earlier vLLM versions forced V0 fallback when >1. In 0.11.0 V1, this is irrelevant.
+**`--scheduling-policy priority`:** Enabled (Mar 2026). Clients send `extra_body={"priority": N}`. Lower N = higher priority. Default 0 if not specified. Affects prefill queue order and preemption.
 
 **`--gpu-memory-utilization`:** 0.70 minimum. 0.65 hangs (no KV cache room).
 
@@ -550,7 +546,7 @@ budget with WAITING request prefills. No artificial serialization.
 ### Recovery (Feb 2026)
 
 Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entrypoint retries vLLM 3 times.
-**Watchdog** (`vllm-watchdog.sh`) handles recovery: test request every 5 min, redeploy after 2 failures.
+**Watchdog** (`vllm-watchdog.sh`) on spark-1: polls every 60s, saves crash logs from both nodes to `crash-logs/<timestamp>/`, then calls `deploy-122b-fp8.sh` after 3 fails. ~8 min total recovery.
 **Entrypoints:** `vllm-head-entrypoint.sh` (Ray head + vLLM retry), `vllm-worker-entrypoint.sh` (Ray worker with retry-connect).
 
 ## Model Cache (Jan 2026)
@@ -594,10 +590,10 @@ Peak: **493 dec tok/s** at c=256.
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
 **Memory:** 0.70 util, KV cache 21.14 GiB/node. CUDA graphs: PIECEWISE (no enforce-eager).
-**Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA.
+**Key flags:** fastsafetensors, flashinfer, prefix caching, 16384 batch tokens, priority scheduling, dual-rail RDMA.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
-**Stability:** Extremely stable with spark-vllm-docker (native sm_121a). Previous stock v0.17.0 crashed in 6-57 min.
+**Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown). Requires manual redeploy.
 **Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. With 4 GB free at 1.5 GB/hr total drain, expect swap pressure after ~3 hours. Swap (320 GB, swappiness=200) provides long runway. Not a stability risk, just gradual RAM pressure.
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
@@ -748,11 +744,13 @@ Can be dramatically faster. May OOM in TP scenarios.
 **Metrics:** Queries use `or` to show both `vllm:` and `llamacpp:` prefixes.
 Whichever server runs on :8000 gets scraped automatically.
 
-**Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100 (spark-1/2/3), dcgm :9400
+**Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100 (spark-1/2/3). GPU metrics via `gpu-metrics.sh` → textfile collector (no DCGM on ARM64).
 
 **RDMA panel:** Uses `node_infiniband_port_data_*` (RDMA verbs counters), not `node_network_*` (Ethernet). Dual-rail aggregate per node.
 
-**Config files:** `~/.config/prometheus/prometheus.yml` (actual), `prometheus.yml` (repo copy). `systemd/node-exporter.service`
+**Config files:** `~/.config/prometheus/prometheus.yml` (actual), `prometheus.yml` (repo copy). `systemd/node-exporter.service`, `systemd/gpu-metrics.service`
+
+**Thermal zones (ACPI):** TSOC (SoC), TS0E/TS0P (CPU cluster 0 E/P cores), TS1E/TS1P (cluster 1), TGPU (GPU), TUNC (uncore). Critical trip: 104°C. Firmware throttles before via SW/HW thermal slowdown + power capping. Head node (spark-2) runs hotter (~97°C SoC under load).
 
 **Export:** `curl -s -u admin:admin123 http://localhost:3000/api/dashboards/uid/vllm-spark | jq '.dashboard' > grafana/vllm-dashboard.json`
 
