@@ -488,11 +488,11 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 
 ### Scheduler Tuning
 
-**`max_num_batched_tokens`:** Set to 8192. Tried 16384 (Mar 2026, KV cache -6%) but reverted. Old OOM issues were on stock v0.17.0-cu130; native build handled 16384 fine but reverted for stability.
+**`max_num_batched_tokens`:** Set to 8192. 16384 causes NVIDIA driver OOM on head node (spark-2) — head uses ~9 GB more RAM than worker for EngineCore/API/Ray overhead, leaving insufficient headroom for CUDA graph capture at larger batch sizes.
 
 **`max_num_partial_prefills`:** Default 1. Hardcoded check in spark-vllm-docker build rejects >1 ("Concurrent Partial Prefill is not supported"). Cannot increase without newer vLLM.
 
-**`--scheduling-policy priority`:** Enabled (Mar 2026). Clients send `extra_body={"priority": N}`. Lower N = higher priority. Default 0 if not specified. Affects prefill queue order and preemption.
+**`--scheduling-policy priority`:** Removed (Mar 2026). Was causing zombie/ghost waiting requests from disconnected clients that never got cleaned up.
 
 **`--gpu-memory-utilization`:** 0.70 minimum. 0.65 hangs (no KV cache room).
 
@@ -557,7 +557,8 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 
 **SSH:** spark-2 ↔ spark-3 keys configured.
 
-**Working (Mar 2026):** vLLM with cuDNN enabled (sitecustomize.py no longer disables it) + HF_HUB_OFFLINE=1. FP8 KV cache disabled (suspected crash cause).
+**Working (Mar 2026):** vLLM with cuDNN enabled (sitecustomize.py no longer disables it) + HF_HUB_OFFLINE=1. FP8 KV cache disabled.
+**FP8 KV cache: DO NOT USE with Qwen3.5-122B.** Confirmed silent output corruption (SGLang #19603) — garbage output, no error. DeltaNet linear attention in 122B interacts poorly with FP8 KV at smaller hidden dim. 397B works fine with FP8 KV. Use BF16 KV (auto/default).
 
 **Model load:** ~3 min (42 shards) + ~5 min encoder profiling. **TTFT:** ~5s.
 
@@ -590,11 +591,13 @@ Peak: **493 dec tok/s** at c=256.
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
 **Memory:** 0.70 util, KV cache 21.14 GiB/node. CUDA graphs: PIECEWISE (no enforce-eager).
-**Key flags:** fastsafetensors, flashinfer, prefix caching, 16384 batch tokens, priority scheduling, dual-rail RDMA.
+**Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
-**Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown). Requires manual redeploy.
-**Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. With 4 GB free at 1.5 GB/hr total drain, expect swap pressure after ~3 hours. Swap (320 GB, swappiness=200) provides long runway. Not a stability risk, just gradual RAM pressure.
+**Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
+**Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
+**Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. Head uses ~9 GB more than worker (EngineCore 5.2G, APIServer 2.8G, Ray GCS+dashboard 1.5G). Swap (320 GB, swappiness=200) provides long runway.
+**Potential fix (NOT YET TESTED):** jemalloc via `LD_PRELOAD` — returns fragmented pages to OS. `MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000`. No Spark users have tried this yet. aarch64 caveat: page size must match (Spark=4K, Ubuntu default=4K, should be safe).
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
 
