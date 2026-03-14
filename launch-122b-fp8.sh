@@ -4,6 +4,10 @@
 # Environment variables
 export NCCL_IB_HCA="rocep1s0f1,roceP2p1s0f1"
 
+# jemalloc: reduce memory fragmentation on head node (EngineCore leak mitigation)
+export LD_PRELOAD=/usr/local/lib/python3.12/dist-packages/ray/core/libjemalloc.so
+export MALLOC_CONF="background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
+
 # Run the model
 vllm serve Qwen/Qwen3.5-122B-A10B-FP8 \
   --max-model-len 262144 \

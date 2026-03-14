@@ -597,7 +597,7 @@ Peak: **493 dec tok/s** at c=256.
 **Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
 **Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
 **Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. Head uses ~9 GB more than worker (EngineCore 5.2G, APIServer 2.8G, Ray GCS+dashboard 1.5G). Swap (320 GB, swappiness=200) provides long runway.
-**Potential fix (NOT YET TESTED):** jemalloc via `LD_PRELOAD` — returns fragmented pages to OS. `MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000`. No Spark users have tried this yet. aarch64 caveat: page size must match (Spark=4K, Ubuntu default=4K, should be safe).
+**Mitigation (DEPLOYED Mar 2026):** jemalloc via `LD_PRELOAD` (Ray's bundled `libjemalloc.so`). `MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000`. First Spark deployment using jemalloc — monitoring for effect on leak rate and stability.
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
 
