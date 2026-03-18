@@ -258,7 +258,7 @@ export UCX_NET_DEVICES=$MN_IF_NAME
 export RAY_memory_monitor_refresh_ms=0
 ```
 
-**Ray object store (CRITICAL on UMA):** Default ~30% of RAM (~36 GiB). With vLLM 0.70 GPU util, total ≈ 100% → crashes. Fix: `ray start --object-store-memory=2000000000` (2 GiB) in entrypoint.
+**Ray object store (CRITICAL on UMA):** Default ~30% of RAM (~36 GiB). With vLLM 0.70 GPU util, total ≈ 100% → swap thrashing. Fix: `ray start --object-store-memory=1073741824` (1 GiB). spark-vllm-docker `launch-cluster.sh` sets this automatically since Mar 2026 update. **CRITICAL:** Keep spark-2 repo up-to-date (`git pull`) — old versions lack this fix, causing 36 GB object store waste → 37 GB swap → 60% kernel CPU overhead.
 
 **Socket vs RoCE:** vLLM guide uses socket transport (~100 Gb/s). For full ~200 Gb/s, need NCCL NET/IB (RoCE) with IPs on BOTH halves of the port. GPUDirect unsupported but host-staged RoCE works.
 
@@ -654,6 +654,15 @@ Peak: **211 dec/s** at c=32. c=1 slow due to pipeline bubble. Stability: passed 
 **Reasoning:** `--reasoning-parser qwen3`, `--enforce-eager`.
 **Benchmark (single-node, Mar 2026):** Peak **253 dec/s** at c=256, p50 23.9s.
 Wins at high concurrency vs 122B int4 (1.4x at c=64+), loses at low c (dense vs MoE).
+
+## Qwen3.5-0.8B on spark-1 (Mar 2026)
+
+**Status:** RUNNING single-node on spark-1, port 8000.
+**Model:** `Qwen/Qwen3.5-0.8B` (0.8B dense) | **Container:** `vllm/vllm-openai:cu130-nightly`
+**Memory:** 1.72 GiB model, 0.1 util, 4K context, enforce-eager.
+**API:** `http://localhost:8000/v1/chat/completions`
+**Grafana:** http://localhost:3000/d/vllm-spark1 | **Prometheus job:** `vllm-spark1`
+**Benchmark (single-node, Mar 2026):** Peak **655 dec/s** at c=64.
 
 ## Qwen3.5-397B-A17B-NVFP4 (Feb 2026)
 

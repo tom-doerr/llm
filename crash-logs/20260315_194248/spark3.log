@@ -1,0 +1,46 @@
+
+=============
+== PyTorch ==
+=============
+
+NVIDIA Release 26.01 (build 256811084)
+PyTorch Version 2.10.0a0+a36e1d3
+Container image Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2014-2024 Facebook Inc.
+Copyright (c) 2011-2014 Idiap Research Institute (Ronan Collobert)
+Copyright (c) 2012-2014 Deepmind Technologies    (Koray Kavukcuoglu)
+Copyright (c) 2011-2012 NEC Laboratories America (Koray Kavukcuoglu)
+Copyright (c) 2011-2013 NYU                      (Clement Farabet)
+Copyright (c) 2006-2010 NEC Laboratories America (Ronan Collobert, Leon Bottou, Iain Melvin, Jason Weston)
+Copyright (c) 2006      Idiap Research Institute (Samy Bengio)
+Copyright (c) 2001-2004 Idiap Research Institute (Ronan Collobert, Samy Bengio, Johnny Mariethoz)
+Copyright (c) 2015      Google Inc.
+Copyright (c) 2015      Yangqing Jia
+Copyright (c) 2013-2016 The Caffe contributors
+All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+
+GOVERNING TERMS: The software and materials are governed by the NVIDIA Software License Agreement
+(found at https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-software-license-agreement/)
+and the Product-Specific Terms for NVIDIA AI Products
+(found at https://www.nvidia.com/en-us/agreements/enterprise-software/product-specific-terms-for-ai-products/).
+
+NOTE: CUDA Forward Compatibility mode ENABLED.
+  Using CUDA 13.1 driver version 590.48.01 with kernel driver version 580.126.09.
+  See https://docs.nvidia.com/deploy/cuda-compatibility/ for details.
+
+Waiting for mod application...
+Mod applied, starting node...
+Configuring environment for [node] at 192.168.100.11...
+Starting Ray WORKER node connecting to 192.168.100.10...
+2026-03-15 16:35:34,130	INFO scripts.py:1124 -- [37mLocal node IP[39m: [1m192.168.100.11[22m
+2026-03-15 16:35:36,613	SUCC scripts.py:1140 -- [32m--------------------[39m
+2026-03-15 16:35:36,613	SUCC scripts.py:1141 -- [32mRay runtime started.[39m
+2026-03-15 16:35:36,613	SUCC scripts.py:1142 -- [32m--------------------[39m
+2026-03-15 16:35:36,613	INFO scripts.py:1144 -- To terminate the Ray runtime, run
+2026-03-15 16:35:36,613	INFO scripts.py:1145 -- [1m  ray stop[22m
+2026-03-15 16:35:36,613	INFO scripts.py:1155 -- [36m[1m--block[22m[39m
+2026-03-15 16:35:36,613	INFO scripts.py:1156 -- This command will now block forever until terminated by a signal.
+2026-03-15 16:35:36,613	INFO scripts.py:1159 -- Running subprocesses are monitored and a message will be printed if any of them terminate unexpectedly. Subprocesses exit with SIGTERM will be treated as graceful, thus NOT reported.
+2026-03-15 16:35:36,613	INFO scripts.py:1164 -- Process exit logs will be saved to: [1m/tmp/ray/session_2026-03-15_16-35-31_100352_1/logs/ray_process_exit.log[22m[26m
