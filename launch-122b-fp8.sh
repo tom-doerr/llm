@@ -3,6 +3,7 @@
 
 # Environment variables
 export NCCL_IB_HCA="rocep1s0f1,roceP2p1s0f1"
+export HF_HUB_OFFLINE=1
 
 # jemalloc: reduce memory fragmentation on head node (EngineCore leak mitigation)
 export LD_PRELOAD=/usr/local/lib/python3.12/dist-packages/ray/core/libjemalloc.so

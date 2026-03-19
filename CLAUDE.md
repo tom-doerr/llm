@@ -266,10 +266,7 @@ export RAY_memory_monitor_refresh_ms=0
 
 **cuDNN (Mar 2026):** cuDNN works on GB10 sm_121a with cuDNN 9.15+ (binary compat from sm_120). Previously disabled globally — was wrong, the Conv3d bug was cuDNN < 9.15, not sm_121a. sitecustomize.py no longer disables cuDNN. Image TTFT: 3-12x faster with cuDNN (1024x1024: 1.2s vs 14.8s).
 
-**Attention Backend Fix (REQUIRED for VLM):** Vision encoder profiling hangs without this:
-```bash
--e VLLM_ATTENTION_BACKEND=TRITON_ATTN
-```
+**Attention Backend:** `VLLM_ATTENTION_BACKEND` only affects the decoder, NOT the encoder. Encoder backend is controlled by `--mm-encoder-attn-backend` CLI flag. On sm_121a, auto-selects FLASH_ATTN (via FlashInfer). TRITON_ATTN also available. Large images cause slow encoder processing, not hangs — requests pile up but eventually complete.
 
 **HF_HUB_OFFLINE=1** required when DNS is broken (common on Spark WiFi issues).
 
@@ -591,8 +588,8 @@ Peak: **493 dec tok/s** at c=256.
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
 **Memory:** 0.70 util, KV cache 21.14 GiB/node. CUDA graphs: PIECEWISE (no enforce-eager).
-**Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA.
-**Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
+**Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA, HF_HUB_OFFLINE=1.
+**Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`. Tool calling via opencode may increase crash frequency (heavier request patterns).
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
 **Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
@@ -708,6 +705,13 @@ BGE embeddings running alongside vLLM worker on spark-3.
 **Settings:** `--gpu-memory-utilization 0.02 --max-num-seqs 1 --enforce-eager` (minimal footprint)
 
 **Note:** ModernBERT not compatible with vLLM `--task embed`.
+
+## Multi-Model on Dual Spark (Mar 2026)
+
+**Two TP=2 instances on same GPU pair: NOT POSSIBLE.** No MIG on GB10, NCCL requires exclusive GPU access, Ray can't share GPUs between TP groups.
+**One vLLM instance, two models: NOT SUPPORTED.** Each vLLM process loads exactly one model.
+**Alternatives:** Two single-node TP=1 (one model per Spark), sleep mode time-sharing (`--enable-sleep-mode`, ~0.3-2.5s switch), LoRA adapters (same base model only), LiteLLM proxy for routing.
+**A tiny model (e.g., 0.8B) CAN coexist** alongside TP=2 as a separate single-node vLLM instance on one of the Sparks — uses minimal memory/compute, no NCCL conflict.
 
 ## Instruct vs Thinking Variants
 
