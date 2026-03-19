@@ -11,8 +11,8 @@ if [ "${1:-}" = "stop" ]; then
     echo "Stopped."; exit 0
 fi
 
-# Update spark-vllm-docker repo on spark-2
-ssh spark-2 'cd ~/spark-vllm-docker && git pull --ff-only'
+# spark-vllm-docker pinned at 57b4585 on spark-2 (919a881 caused crashes)
+# ssh spark-2 'cd ~/spark-vllm-docker && git pull --ff-only'
 
 # Sync launch script to spark-2
 scp "$(dirname "$0")/launch-122b-fp8.sh" spark-2:~/spark-vllm-docker/launch-122b-fp8.sh
