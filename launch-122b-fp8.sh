@@ -12,7 +12,7 @@ export MALLOC_CONF="background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:10
 # Run the model
 vllm serve Qwen/Qwen3.5-122B-A10B-FP8 \
   --max-model-len 262144 \
-  --gpu-memory-utilization 0.7 \
+  --gpu-memory-utilization 0.6 \
   --port 8000 \
   --host 0.0.0.0 \
   --load-format fastsafetensors \
@@ -21,6 +21,5 @@ vllm serve Qwen/Qwen3.5-122B-A10B-FP8 \
   --tool-call-parser qwen3_coder \
   --reasoning-parser qwen3 \
   --chat-template unsloth.jinja \
-  --scheduling-policy priority \
   -tp 2 --distributed-executor-backend ray \
   --max-num-batched-tokens 8192
