@@ -34,7 +34,7 @@ while true; do
   if [ $f -ge $MAX_FAILS ]; then
     echo "$(date): saving crash logs and redeploying"
     save_crash_logs
-    bash "$DIR/deploy-122b-fp8.sh"
+    bash "$DIR/deploy-122b-fp8.sh" --no-build
     f=0
     sleep 600
   fi
