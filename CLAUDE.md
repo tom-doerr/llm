@@ -587,13 +587,13 @@ Peak: **493 dec tok/s** at c=256.
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
-**Memory:** 0.70 util. CUDA graphs: PIECEWISE (0.16 GiB, not a memory hog). ~33 GiB overhead from PyTorch allocator fragmentation (10-18G), boot reservations (6.3G), activation memory (2-5G), Ray/NCCL/misc (5-8G). Fix: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
+**Memory:** 0.60 util. At 0.6: ~28 GiB free, zero swap. At 0.7: <1 GiB free, 10 GiB swap → freezes. PyTorch allocator overhead scales with allocation size.
 **Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA, HF_HUB_OFFLINE=1.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
-**Hard crashes (Mar 19-20):** Ray compiled DAG timeout (Ray #58426) + image/script mismatch. Fixed: rebuilt image to v0.17.2rc1.dev7 (Qwen3.5 SSM cache fix, cross-node msg queue fix). Zram masked. Sage disabled. `--no-ray` mode available.
-**Deploy:** `deploy-122b-fp8.sh` pulls + rebuilds + copies image. `--no-build` skips (watchdog uses this).
+**Hard crashes (Mar 19-20):** Known NVIDIA driver bug — UMA OOM causes system freeze instead of CUDA OOM error (NVIDIA acknowledged, unresolved). At 0.7 util driver pins ~116 GiB/121 GiB → no memory for OS → freeze. Fixed by reducing to 0.6 util (~28 GiB free). Community recommends disabling swap entirely (`swapoff -a`) to convert freezes into recoverable OOM-kills. Zram masked. Sage disabled. DO NOT update to driver 590.x (memory leak) or March 20 FE update (halves GPU clocks to 750 MHz).
+**Deploy:** `deploy-122b-fp8.sh` uses `run-recipe.py`. Pulls + rebuilds + copies image. `--no-build` skips (watchdog).
 **Sage daemon:** `~/git/agent_private/`, systemd `sage.service`. Auto-detects model from `/v1/models` at startup. Was stale from Mar 7 (old int4 model) → 404 retry flood. **DISABLED** (Mar 20).
 **Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
 **Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. Head uses ~9 GB more than worker (EngineCore 5.2G, APIServer 2.8G, Ray GCS+dashboard 1.5G). Swap (320 GB, swappiness=200) provides long runway.
