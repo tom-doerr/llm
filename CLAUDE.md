@@ -592,7 +592,8 @@ Peak: **493 dec tok/s** at c=256.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
-**Hard crashes (Mar 19):** 6+ power-cycle crashes. Root cause: thermal — SoC 98°C under heavy decode + warm ambient. NOT OOM (12 GiB free at 0.6 util still crashed). Power spiked 85.8W (vs 54.7W stable). Fix: improve spark-2 cooling.
+**Hard crashes (Mar 19):** 6+ power-cycle crashes. Contributing factors: (1) sage daemon flooding 141+ stale requests (wrong model name → tenacity retry loop), (2) warm ambient, (3) heavy decode workload. SoC 98°C, power 85.8W peak. Sage disabled.
+**Sage daemon:** `~/git/agent_private/`, systemd `sage.service`. Was configured for old int4 model → 404 retry flood. **DISABLED** (Mar 20). Update model name before re-enabling.
 **Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
 **Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. Head uses ~9 GB more than worker (EngineCore 5.2G, APIServer 2.8G, Ray GCS+dashboard 1.5G). Swap (320 GB, swappiness=200) provides long runway.
 **Mitigation (DEPLOYED Mar 2026):** jemalloc via `LD_PRELOAD` (Ray's bundled `libjemalloc.so`). `MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000`. First Spark deployment using jemalloc — monitoring for effect on leak rate and stability.
@@ -761,7 +762,8 @@ Can be dramatically faster. May OOM in TP scenarios.
 **Metrics:** Queries use `or` to show both `vllm:` and `llamacpp:` prefixes.
 Whichever server runs on :8000 gets scraped automatically.
 
-**Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100 (spark-1/2/3). GPU metrics via `gpu-metrics.sh` → textfile collector (no DCGM on ARM64).
+**Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100 (spark-1/2/3). GPU metrics via `gpu-metrics.sh` → textfile collector (no DCGM on ARM64). Includes throttle counters, SoC thermal zones, P-state, zram backing, RDMA errors.
+**Retention:** Unlimited (`--storage.tsdb.retention.time=0d`). Data: `~/.local/share/prometheus` (~0.6 GB/day).
 
 **RDMA panel:** Uses `node_infiniband_port_data_*` (RDMA verbs counters), not `node_network_*` (Ethernet). Dual-rail aggregate per node.
 
