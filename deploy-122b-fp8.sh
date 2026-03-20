@@ -25,8 +25,6 @@ ssh spark-3 'docker rm -f vllm_node 2>/dev/null' || true
 ssh spark-2 "cd ~/spark-vllm-docker && python3 run-recipe.py qwen3.5-122b-fp8 \
     -n $NODES --ib-if rocep1s0f1,roceP2p1s0f1 --eth-if enp1s0f1np1 \
     -e NCCL_IB_HCA=rocep1s0f1,roceP2p1s0f1 -e HF_HUB_OFFLINE=1 \
-    -e LD_PRELOAD=/usr/local/lib/python3.12/dist-packages/ray/core/libjemalloc.so \
-    -e 'MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000' \
     --no-ray -d"
 
 echo "API: http://192.168.110.2:8000/v1"
