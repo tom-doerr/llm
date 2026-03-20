@@ -587,13 +587,13 @@ Peak: **493 dec tok/s** at c=256.
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
-**Memory:** 0.60 util (reduced from 0.70 Mar 19 for thermal headroom). CUDA graphs: PIECEWISE.
+**Memory:** 0.70 util (restored Mar 20). CUDA graphs: PIECEWISE (86 captures, ~15-25 GiB overhead on UMA).
 **Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA, HF_HUB_OFFLINE=1.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
-**Hard crashes (Mar 19):** 6+ power-cycle crashes. Contributing factors: (1) sage daemon flooding 141+ stale requests (wrong model name → tenacity retry loop), (2) warm ambient, (3) heavy decode workload. SoC 98°C, power 85.8W peak. Sage disabled.
-**Sage daemon:** `~/git/agent_private/`, systemd `sage.service`. Was configured for old int4 model → 404 retry flood. **DISABLED** (Mar 20). Update model name before re-enabling.
+**Hard crashes (Mar 19-20):** Root cause: UMA memory pressure. GPU driver pins ~116 GiB of 121 GiB (model 62G + KV 21G + CUDA graphs 15-25G + NCCL/fragmentation 10G), leaving <1 GiB for OS → NCCL stalls → DAG timeout. Contributing: sage daemon retry flood (disabled), warm ambient, zram backing store eating 2 GiB RAM. **Fix (testing):** disable zram on spark-2/spark-3 (`sudo swapoff /dev/zram0`; permanent: `sudo systemctl disable systemd-zram-setup@zram0.service`). NVMe swap (256 GiB) remains as fallback.
+**Sage daemon:** `~/git/agent_private/`, systemd `sage.service`. Auto-detects model from `/v1/models` at startup. Was stale from Mar 7 (old int4 model) → 404 retry flood. **DISABLED** (Mar 20).
 **Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
 **Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. Head uses ~9 GB more than worker (EngineCore 5.2G, APIServer 2.8G, Ray GCS+dashboard 1.5G). Swap (320 GB, swappiness=200) provides long runway.
 **Mitigation (DEPLOYED Mar 2026):** jemalloc via `LD_PRELOAD` (Ray's bundled `libjemalloc.so`). `MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000`. First Spark deployment using jemalloc — monitoring for effect on leak rate and stability.

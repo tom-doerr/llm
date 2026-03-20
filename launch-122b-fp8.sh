@@ -12,7 +12,7 @@ export MALLOC_CONF="background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:10
 # Run the model
 vllm serve Qwen/Qwen3.5-122B-A10B-FP8 \
   --max-model-len 262144 \
-  --gpu-memory-utilization 0.6 \
+  --gpu-memory-utilization 0.7 \
   --port 8000 \
   --host 0.0.0.0 \
   --load-format fastsafetensors \
