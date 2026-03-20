@@ -3,7 +3,7 @@
 # API: http://192.168.110.2:8000/v1
 # Usage: ./deploy-122b-fp8.sh [stop|--no-build]
 set -e
-CD="$(cd "$(dirname "$0")/spark-vllm-docker" && pwd)"
+NODES="192.168.100.10,192.168.100.11"
 
 if [ "${1:-}" = "stop" ]; then
     ssh spark-2 'docker rm -f vllm_node 2>/dev/null' || true
@@ -17,19 +17,17 @@ if [ "${1:-}" != "--no-build" ]; then
     ssh spark-2 'cd ~/spark-vllm-docker && ./build-and-copy.sh --copy-to spark-3'
 fi
 
-# Sync launch script to spark-2
-scp "$(dirname "$0")/launch-122b-fp8.sh" spark-2:~/spark-vllm-docker/launch-122b-fp8.sh
-
 # Clean restart
 ssh spark-2 'docker rm -f vllm_node 2>/dev/null' || true
 ssh spark-3 'docker rm -f vllm_node 2>/dev/null' || true
 
-ssh spark-2 "cd ~/spark-vllm-docker && ./launch-cluster.sh \
-    -n 192.168.100.10,192.168.100.11 \
-    --eth-if enp1s0f1np1 \
-    --ib-if rocep1s0f1,roceP2p1s0f1 \
-    --apply-mod mods/fix-qwen3.5-chat-template \
-    --launch-script launch-122b-fp8.sh -d"
+# Deploy via run-recipe.py (generates launch script from YAML + calls launch-cluster.sh)
+ssh spark-2 "cd ~/spark-vllm-docker && python3 run-recipe.py qwen3.5-122b-fp8 \
+    -n $NODES --ib-if rocep1s0f1,roceP2p1s0f1 --eth-if enp1s0f1np1 \
+    -e NCCL_IB_HCA=rocep1s0f1,roceP2p1s0f1 -e HF_HUB_OFFLINE=1 \
+    -e LD_PRELOAD=/usr/local/lib/python3.12/dist-packages/ray/core/libjemalloc.so \
+    -e 'MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000' \
+    --no-ray -d"
 
 echo "API: http://192.168.110.2:8000/v1"
 echo "Logs: ssh spark-2 'docker logs -f vllm_node'"
