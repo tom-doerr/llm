@@ -22,4 +22,5 @@ vllm serve Qwen/Qwen3.5-122B-A10B-FP8 \
   --reasoning-parser qwen3 \
   --chat-template unsloth.jinja \
   -tp 2 --distributed-executor-backend ray \
-  --max-num-batched-tokens 8192
+  --max-num-batched-tokens 8192 \
+  --max-cudagraph-capture-size 128
