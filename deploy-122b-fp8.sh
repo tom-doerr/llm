@@ -25,7 +25,7 @@ ssh spark-3 'docker rm -f vllm_node 2>/dev/null' || true
 ssh spark-2 "cd ~/spark-vllm-docker && python3 run-recipe.py qwen3.5-122b-fp8 \
     -n $NODES --ib-if rocep1s0f1,roceP2p1s0f1 --eth-if enp1s0f1np1 \
     -e NCCL_IB_HCA=rocep1s0f1,roceP2p1s0f1 -e HF_HUB_OFFLINE=1 \
-    --gpu-mem 0.6 -d"
+    --gpu-mem 0.65 -d -- --max-num-batched-tokens 2048"
 
 echo "API: http://192.168.110.2:8000/v1"
 echo "Logs: ssh spark-2 'docker logs -f vllm_node'"
