@@ -587,8 +587,8 @@ Peak: **493 dec tok/s** at c=256.
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
-**Memory:** 0.60 util. At 0.6: ~28 GiB free, zero swap. At 0.7: <1 GiB free, 10 GiB swap → freezes. PyTorch allocator overhead scales with allocation size.
-**Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA, HF_HUB_OFFLINE=1.
+**Memory:** 0.60 util + 4096 batch tokens. At 0.6: ~28 GiB free idle, ~12 GiB under load. At 0.65/0.7: drops to ~2 GiB under sustained load → UMA freeze risk. Non-CUDA overhead (EngineCore trie, Ray, request buffers) expands to fill all available memory regardless of util setting.
+**Key flags:** fastsafetensors, flashinfer, prefix caching, 4096 batch tokens (min 2096 for Mamba cache align), dual-rail RDMA, HF_HUB_OFFLINE=1, jemalloc LD_PRELOAD.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
@@ -596,8 +596,8 @@ Peak: **493 dec tok/s** at c=256.
 **Deploy:** `deploy-122b-fp8.sh` uses `run-recipe.py`. Pulls + rebuilds + copies image. `--no-build` skips (watchdog).
 **Sage daemon:** `~/git/agent_private/`, systemd `sage.service`. Auto-detects model from `/v1/models` at startup. Was stale from Mar 7 (old int4 model) → 404 retry flood. **DISABLED** (Mar 20).
 **Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
-**Memory leak (head only, Mar 2026):** EngineCore grows ~450 MB/hr in anonymous mmap allocations. Prefix cache trie metadata + Python malloc fragmentation. Worker (spark-3) is flat. Head uses ~9 GB more than worker (EngineCore 5.2G, APIServer 2.8G, Ray GCS+dashboard 1.5G). Swap (320 GB, swappiness=200) provides long runway.
-**Mitigation (DEPLOYED Mar 2026):** jemalloc via `LD_PRELOAD` (Ray's bundled `libjemalloc.so`). `MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000`. First Spark deployment using jemalloc — monitoring for effect on leak rate and stability.
+**Memory leak (head only, Mar 2026):** EngineCore grows ~74 MiB/min under sustained load. Sources: (1) prefix cache trie metadata (never freed, malloc fragmentation); (2) Request reference cycle with mm_features (#28726, partially fixed PR #34183 v0.16.0); (3) GDN warmup leaks ~3.4 GiB (#36973). On UMA, host growth steals from GPU pool → MemAvailable drops from ~47 GiB to ~2 GiB in ~20 min regardless of util setting. UMA profiling bug (#35313, PR #35929 OPEN).
+**Mitigation (DEPLOYED Mar 22):** jemalloc via `LD_PRELOAD` (`ray/core/libjemalloc.so` — path changed in CUDA 13.2 image, NOT `ray/jemalloc/lib/`). `MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000`. Other options: `--no-enable-prefix-caching` (~40% perf cost), `--max-num-seqs 32`, periodic watchdog restart.
 **qwen3_5.py:** Use container's built-in version (our local clone imports from `transformers.models.qwen3_5` which doesn't exist in transformers 4.57.6).
 **NVFP4 fix:** Default FLASHINFER_CUTLASS generates E2M1 PTX unsupported on sm_121a. Fix: `VLLM_USE_FLASHINFER_MOE_FP4=0 VLLM_NVFP4_GEMM_BACKEND=marlin VLLM_TEST_FORCE_FP8_MARLIN=1`. Confirmed working on DGX Spark (forum).
 
@@ -760,8 +760,7 @@ Can be dramatically faster. May OOM in TP scenarios.
 **URL:** http://localhost:3000/d/vllm-spark
 **Title:** "Inference Server (spark-2/spark-3)" — unified for vLLM + llama.cpp
 
-**Metrics:** Queries use `or` to show both `vllm:` and `llamacpp:` prefixes.
-Whichever server runs on :8000 gets scraped automatically.
+**Metrics:** All vLLM queries filter `{job="vllm"}` to exclude spark-1 (0.8B) data. Queries use `or` for `llamacpp:` prefixes. Prometheus jobs: `vllm` (spark-2:8000), `vllm-spark1` (localhost:8000).
 
 **Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100 (spark-1/2/3). GPU metrics via `gpu-metrics.sh` → textfile collector (no DCGM on ARM64). Includes throttle counters, SoC thermal zones, P-state, zram backing, RDMA errors.
 **Retention:** Unlimited (`--storage.tsdb.retention.time=0d`). Data: `~/.local/share/prometheus` (~0.6 GB/day).
