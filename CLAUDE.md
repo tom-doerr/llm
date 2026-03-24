@@ -587,16 +587,19 @@ Peak: **493 dec tok/s** at c=256.
 
 **Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
 **MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
-**Memory:** 0.60 util + 4096 batch tokens. At 0.6: ~28 GiB free idle, ~12 GiB under load. At 0.65/0.7: drops to ~2 GiB under sustained load → UMA freeze risk. Non-CUDA overhead (EngineCore trie, Ray, request buffers) expands to fill all available memory regardless of util setting.
-**Key flags:** fastsafetensors, flashinfer, prefix caching, 4096 batch tokens (min 2096 for Mamba cache align), dual-rail RDMA, HF_HUB_OFFLINE=1, jemalloc LD_PRELOAD.
+**Memory:** 0.7 util + 8192 batch tokens (recipe default). jemalloc stabilizes memory at ~4-5 GiB available under sustained load. Without jemalloc, drops to ~2 GiB. Min batch tokens = 2096 (Mamba cache align).
+**Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA, HF_HUB_OFFLINE=1, jemalloc, UCX_MEM_MMAP_HOOK_MODE=none.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
 **Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
 **Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
-**Hard crashes (Mar 19-20):** Known NVIDIA driver bug — UMA OOM causes system freeze instead of CUDA OOM error (NVIDIA acknowledged, unresolved). At 0.7 util driver pins ~116 GiB/121 GiB → no memory for OS → freeze. Fixed by reducing to 0.6 util (~28 GiB free). Community recommends disabling swap entirely (`swapoff -a`) to convert freezes into recoverable OOM-kills. Zram masked. Sage disabled. DO NOT update to driver 590.x (memory leak) or March 20 FE update (halves GPU clocks to 750 MHz).
+**Hard crashes — two independent causes (Mar 2026):**
+1. **Thermal (uncore ≥95°C):** Uncore handles memory controllers + interconnects. Throttle stalls NCCL allreduce → crash. Correlates with sunny days (direct sunlight on Spark). Uncore ≥96°C is 0.1% of samples — only occurs on crash days. Fix: fan/airflow. Room temp 27°C + sun = crash.
+2. **UMA OOM (MemAvail <1 GiB):** NVIDIA driver freezes instead of CUDA OOM (acknowledged, unresolved). Community: `swapoff -a` converts to recoverable OOM-kill.
+16/19 crashes in Mar were FULL REBOOTS (system freeze), 3 were vLLM-only (compiled DAG). Distinguish via `node_boot_time_seconds` in Prometheus. DO NOT update to driver 590.x (memory not released after CUDA exit) or March 20 FE update (halves GPU clocks).
 **Deploy:** `deploy-122b-fp8.sh` uses `run-recipe.py`. Pulls + rebuilds + copies image. `--no-build` skips (watchdog).
 **Sage daemon:** `~/git/agent_private/`, systemd `sage.service`. Auto-detects model from `/v1/models` at startup. Was stale from Mar 7 (old int4 model) → 404 retry flood. **DISABLED** (Mar 20).
 **Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
-**Memory leak (head only, Mar 2026):** EngineCore grows ~74 MiB/min under sustained load. Sources: (1) prefix cache trie metadata (never freed, malloc fragmentation); (2) Request reference cycle with mm_features (#28726, partially fixed PR #34183 v0.16.0); (3) GDN warmup leaks ~3.4 GiB (#36973). On UMA, host growth steals from GPU pool → MemAvailable drops from ~47 GiB to ~2 GiB in ~20 min regardless of util setting. UMA profiling bug (#35313, PR #35929 OPEN).
+**Memory leak (head only, Mar 2026):** EngineCore grows ~74 MiB/min under sustained prompt_logprobs load. prompt_logprobs bypass prefix cache (full recompute) + allocate [batch×152K vocab] logit tensors unbudgeted by profiler (#5907, closed "not planned"). `BlockHashToBlockMap` is a flat dict (not trie) that never shrinks internal hash table. jemalloc stabilizes at ~4-5 GiB equilibrium. On discrete GPU servers the leak is invisible (1.5 TB host RAM). On UMA it's fatal. Other sources: Request reference cycle (#28726, partially fixed PR #34183), GDN warmup (#36973), UMA profiling bug (#35313).
 **Root cause (Mar 22):** prompt_logprobs requests bypass prefix cache (full recompute each request) + `BlockHashToBlockMap` (flat dict, not trie) never shrinks internal hash table. On discrete GPU servers the ~4.4 GB/hr host leak is invisible (1.5 TB free). On UMA it's fatal. vLLM tracking issue #5907 closed "not planned".
 **Fix:** LRU-capped `OrderedDict` in `BlockHashToBlockMap` (`vllm/v1/core/block_pool.py`). Branch: `fix-prefix-cache-lru` in `~/llm/vllm/`. Deploy by SCP single file into container (keeps async ViT mount intact).
 **Deployed mitigations:** jemalloc `LD_PRELOAD` (`ray/core/libjemalloc.so`), `UCX_MEM_MMAP_HOOK_MODE=none`, `MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000`.
@@ -771,7 +774,7 @@ Can be dramatically faster. May OOM in TP scenarios.
 
 **Config files:** `~/.config/prometheus/prometheus.yml` (actual), `prometheus.yml` (repo copy). `systemd/node-exporter.service`, `systemd/gpu-metrics.service`
 
-**Thermal zones (ACPI):** TSOC (SoC), TS0E/TS0P (CPU cluster 0 E/P cores), TS1E/TS1P (cluster 1), TGPU (GPU), TUNC (uncore). Critical trip: 104°C. Firmware throttles before via SW/HW thermal slowdown + power capping. Head node (spark-2) runs hotter (~97°C SoC under load).
+**Thermal zones (ACPI):** TSOC (SoC/temp0-1), TS0E/TS0P (CPU cluster 0 E/P, temp2/3), TS1E/TS1P (cluster 1, temp4/7), TGPU (temp5), TUNC (uncore, temp6). Critical trip: 104°C. **Uncore (temp6) is crash predictor** — ≥95°C correlates with full system freezes (0.1% of samples, only on crash days). Avg 86°C, max 97°C. Head (spark-2) runs ~11°C hotter than worker. GPU throttle counters: `node_gpu_throttle_sw_power_us`, `_sw_thermal_us`, `_hw_thermal_us`. GPU clocks: `node_gpu_clock_mhz` (max 3003 MHz, typically 2385 MHz under load = power-capped).
 
 **Export:** `curl -s -u admin:admin123 http://localhost:3000/api/dashboards/uid/vllm-spark | jq '.dashboard' > grafana/vllm-dashboard.json`
 
