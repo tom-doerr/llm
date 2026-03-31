@@ -28,7 +28,7 @@ ssh spark-2 "cd ~/spark-vllm-docker && python3 run-recipe.py qwen3.5-122b-fp8 \
     -e LD_PRELOAD=/usr/local/lib/python3.12/dist-packages/ray/core/libjemalloc.so \
     -e MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000 \
     -e UCX_MEM_MMAP_HOOK_MODE=none \
-    --gpu-mem 0.7 -d"
+    --gpu-mem 0.7 -d -- --enforce-eager"
 
 echo "API: http://192.168.110.2:8000/v1"
 echo "Logs: ssh spark-2 'docker logs -f vllm_node'"
