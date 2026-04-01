@@ -485,7 +485,7 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 
 ### Scheduler Tuning
 
-**`max_num_batched_tokens`:** Set to 8192. 16384 causes NVIDIA driver OOM on head node (spark-2) — head uses ~9 GB more RAM than worker for EngineCore/API/Ray overhead, leaving insufficient headroom for CUDA graph capture at larger batch sizes.
+**`max_num_batched_tokens`:** Set to 16384 (via deploy script `--` passthrough). Previously 8192; 16384 caused OOM with CUDA graphs but works with `--enforce-eager`. Needed for large images (>8192 encoder tokens) to avoid scheduler FCFS deadlock.
 
 **`max_num_partial_prefills`:** Default 1. Hardcoded check in spark-vllm-docker build rejects >1 ("Concurrent Partial Prefill is not supported"). Cannot increase without newer vLLM.
 
