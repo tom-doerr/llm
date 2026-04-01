@@ -673,10 +673,6 @@
                 "value": "watt"
               },
               {
-                "id": "max",
-                "value": 200
-              },
-              {
                 "id": "custom.axisPlacement",
                 "value": "right"
               }
