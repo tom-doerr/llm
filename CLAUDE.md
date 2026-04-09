@@ -410,11 +410,11 @@ curl http://192.168.110.2:8000/v1/chat/completions -H "Content-Type: application
 
 **Root cause of ~1600% CPU:** EngineCore busy-polling + Ray compiled DAG channels.
 
-**Fix:** `VLLM_SLEEP_WHEN_IDLE=1` - drops idle CPU from ~1600% to ~280% (load avg 18→3).
+**Fix:** `VLLM_SLEEP_WHEN_IDLE=1` - drops idle CPU from ~1600% to ~280% (load avg 21→4). **CRITICAL for thermals** — without it, SoC hits 97°C (near 104°C critical). Added to `deploy-122b-fp8.sh` (Apr 2026). Verified: SoC dropped 95→85°C, uncore 82→75°C, CPU idle 0%→72%.
 
 **Multi-node limitation:** vLLM V1 forces compiled DAG on. `VLLM_USE_RAY_COMPILED_DAG=0` ignored.
 
-**Result:** CPU idle 8%→78%, load avg 18→3. Small latency cost on wake-up (acceptable).
+**Result:** CPU idle 0%→72%, load avg 21→4. Small latency cost on wake-up (acceptable).
 
 **Gotcha:** Stale/disconnected client connections still show as `num_requests_running` in metrics.
 When all real work is done but stale requests remain, engine sleeps → 0 tok/s despite N "running".
@@ -522,7 +522,7 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 **Local clone:** `/home/tom/llm/spark-vllm-docker/` (spark-1), `~/spark-vllm-docker/` (spark-2)
 **Usage:** `./run-recipe.sh recipes/<name>.yaml --setup -n <head-ip>,<worker-ip> -d`
 **122B recipes:** `qwen3.5-122b-fp8.yaml` (FP8, current), `qwen3.5-122b-int4-autoround.yaml` (int4).
-**Build:** Downloads prebuilt wheels from GitHub releases. Falls back to compiling from source for sm_121a.
+**Build:** Downloads prebuilt wheels from GitHub releases. Falls back to compiling from source for sm_121a. **IMPORTANT (Apr 2026):** Prebuilt wheels can break when torch nightly changes ABI (e.g. `getCurrentCUDABlasHandle` removed in torch 2.12.0.dev20260408). Fix: `--rebuild-vllm` to force source compilation (~25 min).
 **IB override:** autodiscover picks all 4 ports — must override `--ib-if` to port 1 only for spark-2↔spark-3.
 
 ### Community Dual-Spark Stability (Mar 2026)
@@ -596,7 +596,7 @@ Peak: **493 dec tok/s** at c=256.
 1. **Thermal (uncore ≥95°C):** Uncore handles memory controllers + interconnects. Throttle stalls NCCL allreduce → crash. Correlates with sunny days (direct sunlight on Spark). Uncore ≥96°C is 0.1% of samples — only occurs on crash days. Fix: fan/airflow. Room temp 27°C + sun = crash.
 2. **UMA OOM (MemAvail <1 GiB):** NVIDIA driver freezes instead of CUDA OOM (acknowledged, unresolved). Community: `swapoff -a` converts to recoverable OOM-kill.
 16/19 crashes in Mar were FULL REBOOTS (system freeze), 3 were vLLM-only (compiled DAG). Distinguish via `node_boot_time_seconds` in Prometheus. DO NOT update to driver 590.x (memory not released after CUDA exit) or March 20 FE update (halves GPU clocks).
-**Deploy:** `deploy-122b-fp8.sh` uses `run-recipe.py`. Pulls + rebuilds + copies image. `--no-build` skips (watchdog). Passes `-- --enforce-eager --generation-config auto` (not in recipe, added in deploy script).
+**Deploy:** `deploy-122b-fp8.sh` uses `run-recipe.py`. Pulls + rebuilds + copies image. `--no-build` skips (watchdog). Passes `-- --enforce-eager --generation-config auto` + `VLLM_SLEEP_WHEN_IDLE=1` (not in recipe, added in deploy script). Current vLLM: v0.19.1rc1.dev71 (source-built Apr 2026, torch 2.12.0.dev20260407+cu130).
 **CUDA graphs deadlock (Mar 31):** Without `--enforce-eager`, PIECEWISE CUDA graphs cause silent scheduler deadlock after ~6h under high load (~49 concurrent). Prefills stop permanently while decode drains. GPU goes to 0%, EngineCore spins at 956% CPU. No errors logged. Triggered on v0.18.1rc1.dev196. `--enforce-eager` is both faster AND more stable on multi-node Spark.
 **Sage daemon:** `~/git/agent_private/`, systemd `sage.service`. Auto-detects model from `/v1/models` at startup. Was stale from Mar 7 (old int4 model) → 404 retry flood. **DISABLED** (Mar 20).
 **Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
