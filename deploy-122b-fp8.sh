@@ -29,7 +29,7 @@ ssh spark-2 "cd ~/spark-vllm-docker && python3 run-recipe.py qwen3.5-122b-fp8 \
     -e MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000 \
     -e UCX_MEM_MMAP_HOOK_MODE=none \
     -e VLLM_SLEEP_WHEN_IDLE=1 \
-    --gpu-mem 0.65 -d -- --enforce-eager --generation-config auto --max-num-batched-tokens 8192"
+    --gpu-mem 0.65 -d -- --enforce-eager --generation-config auto --override-generation-config '{\"presence_penalty\":1.0}' --max-num-batched-tokens 8192"
 
 echo "API: http://192.168.110.2:8000/v1"
 echo "Logs: ssh spark-2 'docker logs -f vllm_node'"
