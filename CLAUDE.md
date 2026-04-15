@@ -579,28 +579,33 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 
 Peak: **493 dec tok/s** at c=256.
 
-## Qwen3.5-122B-A10B-FP8 (Mar 2026)
+## Qwen3.5-122B-A10B-FP8 (STABLE — Apr 2026)
 
-**Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker).
+**Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker). Stable since Apr 9.
 **Model:** `Qwen/Qwen3.5-122B-A10B-FP8` | **Container:** `vllm-node` (spark-vllm-docker, native sm_121a)
-**Deploy:** `spark-vllm-docker/launch-cluster.sh` with `launch-122b-fp8.sh` | **API:** `http://192.168.110.2:8000/v1`
+**Deploy:** `deploy-122b-fp8.sh` → `run-recipe.py qwen3.5-122b-fp8` | **API:** `http://192.168.110.2:8000/v1`
 
-**Config fix:** `rope_theta: 10000000` added to `text_config` (missing from HF, defaults to wrong 10000).
-**MoE:** Native sm_121a build — no `VLLM_TEST_FORCE_FP8_MARLIN` needed (CUTLASS compiled for sm_121a).
-**Memory:** 0.7 util + 8192 batch tokens (recipe default). jemalloc stabilizes memory at ~4-5 GiB available under sustained load. Without jemalloc, drops to ~2 GiB. Min batch tokens = 2096 (Mamba cache align).
-**Key flags:** fastsafetensors, flashinfer, prefix caching, 8192 batch tokens, dual-rail RDMA, HF_HUB_OFFLINE=1, jemalloc, UCX_MEM_MMAP_HOOK_MODE=none.
+### Exact Versions (Apr 2026)
+
+vLLM `0.19.1rc1.dev121` (source-built Apr 9), torch `2.12.0.dev20260407+cu130`, FlashInfer `0.6.7`, Ray `2.54.1`, spark-vllm-docker `288da8e`.
+
+**Config fix:** `rope_theta: 10000000` in `text_config`.
+**MoE:** Native sm_121a — no `VLLM_TEST_FORCE_FP8_MARLIN` needed.
+**Memory:** 0.65 util + 8192 batch tokens. jemalloc stabilizes at ~4-5 GiB avail. Min batch tokens = 2096.
+**Key flags:** fastsafetensors, flashinfer, prefix caching, enforce-eager, dual-rail RDMA, `VLLM_SLEEP_WHEN_IDLE=1` (critical — drops idle SoC 95→85°C), jemalloc, `RAY_object_store_memory=1073741824`.
 **Tool calling:** `--tool-call-parser qwen3_coder`, `--chat-template unsloth.jinja`.
-**Reasoning:** `--reasoning-parser qwen3` separates `<think>` into `reasoning` field. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
+**Generation defaults:** temp 0.6, top_k 20, top_p 0.95, presence_penalty 1.0 (override).
+**Reasoning:** `--reasoning-parser qwen3`. Per-request: `extra_body={"chat_template_kwargs":{"enable_thinking": true}}`.
+**Source build required (Apr 2026):** Prebuilt wheels broke (torch ABI change). Use `--rebuild-vllm` (~25 min).
 **Stability:** Much more stable with spark-vllm-docker (native sm_121a) than stock v0.17.0 (6-57 min). Still occasional compiled DAG crashes (Ray CoreWorker GetObjects timeout → DAG teardown, ~1-4h). Auto-recovered by watchdog.
 **Hard crashes — two independent causes (Mar 2026):**
 1. **Thermal (uncore ≥95°C):** Uncore handles memory controllers + interconnects. Throttle stalls NCCL allreduce → crash. Correlates with sunny days (direct sunlight on Spark). Uncore ≥96°C is 0.1% of samples — only occurs on crash days. Fix: fan/airflow. Room temp 27°C + sun = crash.
 2. **UMA OOM (MemAvail <1 GiB):** NVIDIA driver freezes instead of CUDA OOM (acknowledged, unresolved). Community: `swapoff -a` converts to recoverable OOM-kill.
 16/19 crashes in Mar were FULL REBOOTS (system freeze), 3 were vLLM-only (compiled DAG). Distinguish via `node_boot_time_seconds` in Prometheus. DO NOT update to driver 590.x (memory not released after CUDA exit) or March 20 FE update (halves GPU clocks).
-**Deploy:** `deploy-122b-fp8.sh` uses `run-recipe.py`. Pulls + rebuilds + copies image. `--no-build` skips (watchdog). Passes `-- --enforce-eager --generation-config auto --override-generation-config '{"presence_penalty":1.0}'` + `VLLM_SLEEP_WHEN_IDLE=1` (not in recipe, added in deploy script). Current vLLM: v0.19.1rc1.dev71 (source-built Apr 2026, torch 2.12.0.dev20260407+cu130).
-**Default generation settings:** temperature 0.6, top_k 20, top_p 0.95 (from model config), presence_penalty 1.0 (override). Clients can override per-request.
+**Deploy:** `deploy-122b-fp8.sh` uses `run-recipe.py`. `--no-build` skips rebuild (watchdog). All extra flags (enforce-eager, generation overrides, VLLM_SLEEP_WHEN_IDLE) are in deploy script, not recipe.
 **CUDA graphs deadlock (Mar 31):** Without `--enforce-eager`, PIECEWISE CUDA graphs cause silent scheduler deadlock after ~6h under high load (~49 concurrent). Prefills stop permanently while decode drains. GPU goes to 0%, EngineCore spins at 956% CPU. No errors logged. Triggered on v0.18.1rc1.dev196. `--enforce-eager` is both faster AND more stable on multi-node Spark.
 **Sage daemon:** `~/git/agent_private/`, systemd `sage.service`. Auto-detects model from `/v1/models` at startup. Was stale from Mar 7 (old int4 model) → 404 retry flood. **DISABLED** (Mar 20).
-**Benchmark (Mar 2026, 8192 batch, 3-run avg):** Peak **293 dec/s** at c=256. Sweet spot c=64 (234 dec/s, 9.3s p50). Near-linear scaling up to c=16.
+**Benchmark (Apr 2026, vllm bench serve, 128in/128out):** c=1: 19 tok/s (212ms TTFT), c=16: 132, c=64: 247 (3.6s TTFT), c=256: **341** peak. By prompt len: 128→96, 1K→75, 8K→28, 32K→11 tok/s. 65K+ crashes (UMA OOM). Multimodal c=16: 79 tok/s.
 **Memory leak (head only, Mar 2026):** EngineCore grows ~74 MiB/min under sustained prompt_logprobs load. prompt_logprobs bypass prefix cache (full recompute) + allocate [batch×152K vocab] logit tensors unbudgeted by profiler (#5907, closed "not planned"). `BlockHashToBlockMap` is a flat dict (not trie) that never shrinks internal hash table. jemalloc stabilizes at ~4-5 GiB equilibrium. On discrete GPU servers the leak is invisible (1.5 TB host RAM). On UMA it's fatal. Other sources: Request reference cycle (#28726, partially fixed PR #34183), GDN warmup (#36973), UMA profiling bug (#35313).
 **Root cause (Mar 22):** prompt_logprobs requests bypass prefix cache (full recompute each request) + `BlockHashToBlockMap` (flat dict, not trie) never shrinks internal hash table. On discrete GPU servers the ~4.4 GB/hr host leak is invisible (1.5 TB free). On UMA it's fatal. vLLM tracking issue #5907 closed "not planned".
 **Fix:** LRU-capped `OrderedDict` in `BlockHashToBlockMap` (`vllm/v1/core/block_pool.py`). Branch: `fix-prefix-cache-lru` in `~/llm/vllm/`. Deploy by SCP single file into container (keeps async ViT mount intact).
