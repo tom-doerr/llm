@@ -647,9 +647,18 @@ Peak: **211 dec/s** at c=32. c=1 slow due to pipeline bubble. Stability: passed 
 **Multi-node UNSTABLE:** TP=2 crashes ~27-40 min, DP=2 ~24 min (MoE EP NCCL sync).
 **Single-node is the stable deployment** for this model. 0.85 util → hard freeze.
 
+## Qwen3.6-35B-A3B-FP8 (Apr 2026)
+
+**Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker).
+**Model:** `Qwen/Qwen3.6-35B-A3B-FP8` (35B total, 3B active per token)
+**Deploy:** `deploy-qwen3.6-35b-fp8.sh` | **Recipe:** `qwen3.6-35b-a3b-fp8.yaml`
+**API:** `http://192.168.110.2:8000/v1`
+**Key diffs from 122B:** 0.50 gpu-mem (vs 0.65), no FP8 KV cache, reasoning-parser qwen3.
+**Cached on:** spark-1, spark-2, spark-3 (35G each, copied from NAS).
+
 ## Qwen3.5-35B-A3B-FP8 (Feb 2026)
 
-**Status:** NOT running (122B FP8 TP=2 deployed instead).
+**Status:** NOT running.
 **Model:** `Qwen/Qwen3.5-35B-A3B-FP8` (35B total, 3B active per token)
 **Container:** `vllm/vllm-openai:cu130-nightly` (v0.16.1rc1.dev111)
 **Script:** `./start-vllm-fast.sh` | **Memory:** 34.71 GiB, 0.70 util (default), KV cache 816K tokens.
