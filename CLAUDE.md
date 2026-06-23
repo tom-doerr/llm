@@ -649,11 +649,18 @@ Peak: **211 dec/s** at c=32. c=1 slow due to pipeline bubble. Stability: passed 
 
 ## Qwen3.6-35B-A3B-FP8 (Apr 2026)
 
-**Status:** RUNNING on vLLM TP=2, spark-2 (head) + spark-3 (worker).
+**Status:** RUNNING single-node (`--solo --tp 1`) on spark-2 only. (Was TP=2 head/worker; deploy script switched to solo.)
 **Model:** `Qwen/Qwen3.6-35B-A3B-FP8` (35B total, 3B active per token)
 **Deploy:** `deploy-qwen3.6-35b-fp8.sh` | **Recipe:** `qwen3.6-35b-a3b-fp8.yaml`
 **API:** `http://192.168.110.2:8000/v1`
 **Key diffs from 122B:** 0.50 gpu-mem (vs 0.65), no FP8 KV cache, reasoning-parser qwen3.
+**gpu-mem (Jun 2026):** 0.50 in deploy script (had drifted to 0.70 → ~90 GiB → spark-2 at OOM
+edge / 0 free; restored to 0.50 → ~64 GiB used, ~34 GiB available, KV 12.6 GiB / 164K tokens,
+2.46x concurrency @ 262K ctx). Recipe default is also 0.7 but the `--gpu-mem` CLI flag overrides it.
+**Redeploy (no race):** can't kill the spark-1 watchdog (`vllm-watchdog.sh`, policy-blocked), so to
+redeploy with new settings: edit the script, then `ssh spark-2 'docker rm -f vllm_node'` — the
+watchdog detects 3 fails (~3 min) and redeploys via `deploy.sh --no-build` (single deployer, no
+collision on the `vllm_node` name). ~5-6 min to healthy.
 **Cached on:** spark-1, spark-2, spark-3 (35G each, copied from NAS).
 
 ## Qwen3.5-35B-A3B-FP8 (Feb 2026)
