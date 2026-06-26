@@ -803,6 +803,28 @@ Can be dramatically faster. May OOM in TP scenarios.
 
 **Import:** See `grafana/README.md`
 
+## NAS Metrics (Jun 2026)
+
+`node-nas` job scrapes `nas.tail620cfa.ts.net:9100` (containerized
+`prom/node-exporter`, host-net, `/:/host:ro`) → md/RAID, hwmon temps, fs, NFS,
+btrfs, disk IO, cpu/mem/net.
+
+**Custom dm-cache** metrics (node_exporter can't see lvmcache) via textfile
+collector: `nas-dmcache-exporter --loop` (5s) writes
+`/var/lib/node_exporter/textfile_collector/nas_dmcache.prom`. Source/unit/run-script
+in **NAS** `~/git/private/nas/`, symlinked to `/usr/local/sbin` +
+`/etc/systemd/system`; svc `nas-dmcache-exporter.service`. Container recreated w/
+`--collector.textfile.directory=/host/var/lib/node_exporter/textfile_collector`
+(run-script `nas-node-exporter-run.sh`).
+
+Metrics: `nas_dmcache_{dirty_ratio,dirty_blocks,total_blocks,read_hits_total,
+read_misses_total,write_hits_total,write_misses_total,promotions_total,
+demotions_total,migration_threshold_sectors}`.
+
+**Dashboard:** `grafana/provisioned/nas-dashboard.json` (UID `nas-cache`,
+file-provisioned via `~/.local/share/grafana/conf/provisioning/dashboards/nas.yaml`
+→ path `~/llm/grafana/provisioned`). http://localhost:3000/d/nas-cache
+
 ## Notes
 
 **OOM killers:** Inactive on spark-2/spark-3 (unlike spark-1). Only kernel OOM kicks in.
