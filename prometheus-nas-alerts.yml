@@ -1,0 +1,33 @@
+groups:
+  - name: nas
+    rules:
+      - alert: NASDiskSMARTFailed
+        expr: nas_smart_healthy == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: "NAS disk {{ $labels.disk }} SMART health FAILED"}
+      - alert: NASDiskReallocatedSectors
+        expr: nas_smart_reallocated_sectors > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "NAS disk {{ $labels.disk }}: {{ $value }} reallocated sectors"}
+      - alert: NASDiskPendingSectors
+        expr: nas_smart_pending_sectors > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "NAS disk {{ $labels.disk }}: {{ $value }} pending sectors"}
+      - alert: NASDiskCRCErrors
+        expr: nas_smart_udma_crc_errors > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "NAS disk {{ $labels.disk }}: {{ $value }} UDMA CRC errors (check cable)"}
+      - alert: NASCacheDirtySaturated
+        expr: nas_dmcache_dirty_ratio >= 99
+        for: 1h
+        labels: {severity: warning}
+        annotations: {summary: "NAS dm-cache dirty >=99% for 1h (saturated / not draining)"}
+      - alert: NASCacheExporterStale
+        expr: time() - nas_dmcache_last_run_seconds > 60
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "NAS dm-cache exporter stale (metrics not updating)"}

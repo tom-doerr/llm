@@ -831,6 +831,12 @@ power_on_hours,temperature_celsius,nvme_percentage_used_pct,nvme_available_spare
 nvme_media_errors}`. Same deploy (NAS `~/git/private/nas/` + symlinks, svc
 `nas-smart-exporter.service`). Dashboard panels 5-6.
 
+**Alerts:** `prometheus-nas-alerts.yml` (6 rules: disk SMART failed, reallocated /
+pending sectors, UDMA CRC errors, cache dirty >=99% for 1h, dm-cache exporter stale).
+Referenced from live `~/.config/prometheus/prometheus.yml` `rule_files:`. Visible in
+Prometheus Alerts tab + dashboard panel 7 (firing-alert count). No Alertmanager/push
+channel wired yet — alerts evaluate + show but don't notify.
+
 ## Notes
 
 **OOM killers:** Inactive on spark-2/spark-3 (unlike spark-1). Only kernel OOM kicks in.
