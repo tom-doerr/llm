@@ -834,8 +834,11 @@ nvme_media_errors}`. Same deploy (NAS `~/git/private/nas/` + symlinks, svc
 **Alerts:** `prometheus-nas-alerts.yml` (6 rules: disk SMART failed, reallocated /
 pending sectors, UDMA CRC errors, cache dirty >=99% for 1h, dm-cache exporter stale).
 Referenced from live `~/.config/prometheus/prometheus.yml` `rule_files:`. Visible in
-Prometheus Alerts tab + dashboard panel 7 (firing-alert count). No Alertmanager/push
-channel wired yet — alerts evaluate + show but don't notify.
+Prometheus Alerts tab + dashboard panel 7 (firing-alert count). **Push:** `nas-alert-bridge`
+(systemd --user on spark-1, polls firing alerts every 60s) → self-hosted **ntfy**
+(Docker `ntfy` on spark-1 `:8090`, topic `nas-alerts`, 24h cache). Subscribe in the ntfy
+app: server `http://spark-1.tail620cfa.ts.net:8090`, topic `nas-alerts`. Bridge + unit:
+`~/llm/nas-alert-bridge{,.service}` (unit symlinked to `~/.config/systemd/user/`).
 
 ## Notes
 

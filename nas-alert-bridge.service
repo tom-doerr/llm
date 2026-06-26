@@ -1,0 +1,12 @@
+[Unit]
+Description=NAS alert bridge (Prometheus firing alerts -> ntfy push)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/tom/llm/nas-alert-bridge --loop
+Restart=always
+RestartSec=15s
+
+[Install]
+WantedBy=default.target

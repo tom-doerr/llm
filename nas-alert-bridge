@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Bridge: Prometheus firing alerts -> ntfy push. Notifies only on state change (dedup).
+set -uo pipefail
+PROM=${PROM:-http://localhost:9090}
+NTFY=${NTFY:-http://localhost:8090/nas-alerts}
+STATE=${STATE:-/home/tom/.local/state/nas-alert-bridge.state}
+INTERVAL=${INTERVAL:-60}
+
+cycle() {
+  mkdir -p "$(dirname "$STATE")"
+  cur=$(curl -sf "$PROM/api/v1/query?query=ALERTS%7Balertstate%3D%22firing%22%7D" 2>/dev/null \
+    | grep -o '"alertname":"[^"]*"' | cut -d'"' -f4 | sort -u | paste -sd, -)
+  prev=$(cat "$STATE" 2>/dev/null || echo "")
+  [ "$cur" = "$prev" ] && return 0
+  if [ -n "$cur" ]; then
+    curl -s -H "Title: NAS alert firing" -H "Priority: high" -H "Tags: warning" -d "Firing: $cur (see http://localhost:3000/d/nas-cache)" "$NTFY" >/dev/null
+  else
+    curl -s -H "Title: NAS alerts cleared" -H "Tags: white_check_mark" -d "All NAS alerts resolved" "$NTFY" >/dev/null
+  fi
+  echo "$cur" > "$STATE"
+}
+
+if [[ ${1:-} == "--loop" ]]; then while true; do cycle||true; sleep "$INTERVAL"; done; else cycle; fi
