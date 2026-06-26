@@ -825,6 +825,12 @@ demotions_total,migration_threshold_sectors}`.
 file-provisioned via `~/.local/share/grafana/conf/provisioning/dashboards/nas.yaml`
 → path `~/llm/grafana/provisioned`). http://localhost:3000/d/nas-cache
 
+**SMART** (per-disk health): `nas-smart-exporter --loop` (300s) → `nas_smart.prom`.
+Metrics `nas_smart_{healthy,reallocated_sectors,pending_sectors,udma_crc_errors,
+power_on_hours,temperature_celsius,nvme_percentage_used_pct,nvme_available_spare_pct,
+nvme_media_errors}`. Same deploy (NAS `~/git/private/nas/` + symlinks, svc
+`nas-smart-exporter.service`). Dashboard panels 5-6.
+
 ## Notes
 
 **OOM killers:** Inactive on spark-2/spark-3 (unlike spark-1). Only kernel OOM kicks in.
