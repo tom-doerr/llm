@@ -1,9 +1,1361 @@
-{"uid":"nas-cache","title":"NAS dm-cache & state","tags":["nas","cache"],"timezone":"browser","schemaVersion":39,"version":1,"refresh":"10s","time":{"from":"now-6h","to":"now"},"templating":{"list":[]},"panels":[
-{"id":1,"title":"Cache dirty %","type":"timeseries","gridPos":{"h":8,"w":12,"x":0,"y":0},"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"percent","min":0,"max":100,"custom":{"fillOpacity":15}}},"targets":[{"expr":"nas_dmcache_dirty_ratio","legendFormat":"dirty %","refId":"A"}]},
-{"id":2,"title":"Cache hit rate","type":"timeseries","gridPos":{"h":8,"w":12,"x":12,"y":0},"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"percent","min":0,"max":100}},"targets":[{"expr":"100*rate(nas_dmcache_read_hits_total[5m])/(rate(nas_dmcache_read_hits_total[5m])+rate(nas_dmcache_read_misses_total[5m]))","legendFormat":"read hit %","refId":"A"},{"expr":"100*rate(nas_dmcache_write_hits_total[5m])/(rate(nas_dmcache_write_hits_total[5m])+rate(nas_dmcache_write_misses_total[5m]))","legendFormat":"write hit %","refId":"B"}]},
-{"id":3,"title":"Promotions/Demotions per sec","type":"timeseries","gridPos":{"h":8,"w":12,"x":0,"y":8},"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"ops"}},"targets":[{"expr":"rate(nas_dmcache_promotions_total[5m])","legendFormat":"promotions/s","refId":"A"},{"expr":"rate(nas_dmcache_demotions_total[5m])","legendFormat":"demotions/s","refId":"B"}]},
-{"id":4,"title":"NAS temperatures","type":"timeseries","gridPos":{"h":8,"w":12,"x":12,"y":8},"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"celsius"}},"targets":[{"expr":"node_hwmon_temp_celsius{job=\"node-nas\"}","legendFormat":"{{chip}} {{sensor}}","refId":"A"}]},
-{"id":5,"title":"SATA error counters (want 0)","type":"timeseries","gridPos":{"h":8,"w":12,"x":0,"y":16},"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"none"}},"targets":[{"expr":"nas_smart_reallocated_sectors","legendFormat":"realloc {{disk}}","refId":"A"},{"expr":"nas_smart_pending_sectors","legendFormat":"pending {{disk}}","refId":"B"},{"expr":"nas_smart_udma_crc_errors","legendFormat":"crc {{disk}}","refId":"C"}]},
-{"id":6,"title":"NVMe wear & spare %","type":"timeseries","gridPos":{"h":8,"w":12,"x":12,"y":16},"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"percent","max":100}},"targets":[{"expr":"nas_smart_nvme_percentage_used_pct","legendFormat":"used {{disk}}","refId":"A"},{"expr":"nas_smart_nvme_available_spare_pct","legendFormat":"spare {{disk}}","refId":"B"}]},
-{"id":7,"title":"Active NAS alerts (0=healthy)","type":"stat","gridPos":{"h":4,"w":24,"x":0,"y":24},"datasource":{"type":"prometheus","uid":"cfagbva82okjkf"},"fieldConfig":{"defaults":{"unit":"none","color":{"mode":"thresholds"},"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"red","value":1}]}}},"targets":[{"expr":"count(ALERTS{alertstate=\"firing\"}) or vector(0)","legendFormat":"firing","refId":"A"}]}
-]}
+{
+  "uid": "nas-cache",
+  "title": "NAS storage, drives, SMART, bcachefs",
+  "tags": [
+    "nas",
+    "storage",
+    "bcachefs",
+    "smart",
+    "drives"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "NAS target up",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "up{job=\"node-nas\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "bcachefs mounted",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_mounted{mount=\"/pool\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "SMART unhealthy drives",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "count(nas_smart_healthy == 0) or vector(0)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Active alerts",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "expr": "count(ALERTS{alertstate=\"firing\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "NAS CPU / memory",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{job=\"node-nas\",mode=\"idle\"}[2m])))",
+          "legendFormat": "cpu used %",
+          "refId": "A"
+        },
+        {
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"node-nas\"} / node_memory_MemTotal_bytes{job=\"node-nas\"})",
+          "legendFormat": "mem used %",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "NAS pressure",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 * rate(node_pressure_cpu_waiting_seconds_total{job=\"node-nas\"}[2m])",
+          "legendFormat": "cpu psi",
+          "refId": "A"
+        },
+        {
+          "expr": "100 * rate(node_pressure_memory_waiting_seconds_total{job=\"node-nas\"}[2m])",
+          "legendFormat": "mem psi",
+          "refId": "B"
+        },
+        {
+          "expr": "100 * rate(node_pressure_io_waiting_seconds_total{job=\"node-nas\"}[2m])",
+          "legendFormat": "io psi",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "/pool capacity",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_size_bytes{mount=\"/pool\"}",
+          "legendFormat": "pool size",
+          "refId": "A"
+        },
+        {
+          "expr": "nas_bcachefs_used_bytes{mount=\"/pool\"}",
+          "legendFormat": "pool used",
+          "refId": "B"
+        },
+        {
+          "expr": "nas_bcachefs_online_reserved_bytes{mount=\"/pool\"}",
+          "legendFormat": "online reserved",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "bcachefs device used %",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_device_used_percent",
+          "legendFormat": "{{label}} {{block_device}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "bcachefs device used bytes",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_device_used_bytes",
+          "legendFormat": "{{label}} {{block_device}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "bcachefs device congestion",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_device_congested_percent",
+          "legendFormat": "{{label}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "bcachefs per-device write/read latency",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_device_io_latency_seconds{op=\"write\"} * 1000",
+          "legendFormat": "write {{label}}",
+          "refId": "A"
+        },
+        {
+          "expr": "nas_bcachefs_device_io_latency_seconds{op=\"read\"} * 1000",
+          "legendFormat": "read {{label}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "bcachefs recent mean latency",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_device_io_latency_mean_seconds{window=\"recent\"} * 1000",
+          "legendFormat": "{{op}} {{label}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Drive throughput",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(node_disk_read_bytes_total{job=\"node-nas\",device=~\"sd[a-z]|nvme[0-9]n[0-9]|md[0-9]+|dm-[0-9]+\"}[1m])",
+          "legendFormat": "read {{device}}",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(node_disk_written_bytes_total{job=\"node-nas\",device=~\"sd[a-z]|nvme[0-9]n[0-9]|md[0-9]+|dm-[0-9]+\"}[1m])",
+          "legendFormat": "write {{device}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Drive utilization",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 * rate(node_disk_io_time_seconds_total{job=\"node-nas\",device=~\"sd[a-z]|nvme[0-9]n[0-9]|md[0-9]+|dm-[0-9]+\"}[1m])",
+          "legendFormat": "{{device}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Drive queue depth",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "node_disk_io_now{job=\"node-nas\",device=~\"sd[a-z]|nvme[0-9]n[0-9]|md[0-9]+|dm-[0-9]+\"}",
+          "legendFormat": "{{device}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Drive await approximation",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "1000 * rate(node_disk_read_time_seconds_total{job=\"node-nas\",device=~\"sd[a-z]|nvme[0-9]n[0-9]|md[0-9]+|dm-[0-9]+\"}[1m]) / clamp_min(rate(node_disk_reads_completed_total{job=\"node-nas\",device=~\"sd[a-z]|nvme[0-9]n[0-9]|md[0-9]+|dm-[0-9]+\"}[1m]), 0.001)",
+          "legendFormat": "read {{device}}",
+          "refId": "A"
+        },
+        {
+          "expr": "1000 * rate(node_disk_write_time_seconds_total{job=\"node-nas\",device=~\"sd[a-z]|nvme[0-9]n[0-9]|md[0-9]+|dm-[0-9]+\"}[1m]) / clamp_min(rate(node_disk_writes_completed_total{job=\"node-nas\",device=~\"sd[a-z]|nvme[0-9]n[0-9]|md[0-9]+|dm-[0-9]+\"}[1m]), 0.001)",
+          "legendFormat": "write {{device}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Drive temperatures",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 46
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_smart_temperature_celsius",
+          "legendFormat": "SMART {{disk}}",
+          "refId": "A"
+        },
+        {
+          "expr": "node_hwmon_temp_celsius{job=\"node-nas\"}",
+          "legendFormat": "hwmon {{chip}} {{sensor}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "NVMe wear / spare",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_smart_nvme_percentage_used_pct",
+          "legendFormat": "used {{disk}}",
+          "refId": "A"
+        },
+        {
+          "expr": "nas_smart_nvme_available_spare_pct",
+          "legendFormat": "spare {{disk}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "NVMe total data read/written",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_smart_nvme_data_units_read_bytes",
+          "legendFormat": "read {{disk}}",
+          "refId": "A"
+        },
+        {
+          "expr": "nas_smart_nvme_data_units_written_bytes",
+          "legendFormat": "written {{disk}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Drive SMART errors",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 53
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_smart_reallocated_sectors",
+          "legendFormat": "realloc {{disk}}",
+          "refId": "A"
+        },
+        {
+          "expr": "nas_smart_pending_sectors",
+          "legendFormat": "pending {{disk}}",
+          "refId": "B"
+        },
+        {
+          "expr": "nas_smart_offline_uncorrectable",
+          "legendFormat": "offline uncorrect {{disk}}",
+          "refId": "C"
+        },
+        {
+          "expr": "nas_smart_udma_crc_errors",
+          "legendFormat": "crc {{disk}}",
+          "refId": "D"
+        },
+        {
+          "expr": "nas_smart_nvme_media_errors",
+          "legendFormat": "nvme media {{disk}}",
+          "refId": "E"
+        },
+        {
+          "expr": "nas_smart_nvme_error_log_entries",
+          "legendFormat": "nvme errorlog {{disk}}",
+          "refId": "F"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "title": "bcachefs I/O by category",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 60
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(nas_bcachefs_device_io_bytes_total[1m])",
+          "legendFormat": "{{direction}} {{category}} {{label}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "title": "bcachefs main counters",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 60
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(nas_bcachefs_counter_value{scope=\"mount\",counter=~\"io_read|io_write|io_move|read_promote|copygc|journal_write|transaction_commit\"}[1m])",
+          "legendFormat": "{{counter}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "title": "bcachefs compression bytes",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_compression_compressed_bytes",
+          "legendFormat": "compressed {{type}}",
+          "refId": "A"
+        },
+        {
+          "expr": "nas_bcachefs_compression_uncompressed_bytes",
+          "legendFormat": "uncompressed {{type}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "title": "bcachefs compression ratio",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_compression_uncompressed_bytes / clamp_min(nas_bcachefs_compression_compressed_bytes, 1)",
+          "legendFormat": "{{type}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "title": "bcachefs rebalance",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 74
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_rebalance_working",
+          "legendFormat": "working",
+          "refId": "A"
+        },
+        {
+          "expr": "nas_bcachefs_rebalance_bytes",
+          "legendFormat": "{{metric}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "title": "bcachefs device I/O errors",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 74
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_device_io_errors_total",
+          "legendFormat": "{{op}} {{scope}} {{label}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "title": "bcachefs options",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 81
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "cfagbva82okjkf"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "nas_bcachefs_option_value",
+          "legendFormat": "{{option}}",
+          "refId": "A"
+        },
+        {
+          "expr": "nas_bcachefs_option_bytes",
+          "legendFormat": "{{option}}",
+          "refId": "B"
+        }
+      ]
+    }
+  ]
+}
