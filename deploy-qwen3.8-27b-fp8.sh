@@ -3,7 +3,7 @@
 # Clients:   http://spark-2:8000/v1  (later: http://vllm.tail620cfa.ts.net:8000/v1)
 # Direct:    http://192.168.110.2:8000/v1  (RDMA link, host-management tools only)
 # Usage: ./deploy-qwen3.8-27b-fp8.sh [stop|--no-build]
-#   KV_NVME=1 ./deploy-qwen3.8-27b-fp8.sh   -> experimental: KV cache spills to
+#   KV_NVME=1 [KV_NVME_MTP=1] ./deploy-qwen3.8-27b-fp8.sh -> experimental: KV cache spills to
 #            spark-2's NVMe (vLLM OffloadingConnector fs tier, MTP OFF because
 #            offload+spec-decode is broken upstream). See ~/llm/CLAUDE.md.
 #   GPU_MEM=0.60  -> override --gpu-memory-utilization (default 0.60)
@@ -12,6 +12,7 @@ cd "$(dirname "$0")"
 REMOTE_REPO=/home/tom/spark-vllm-docker-aug   # fresh upstream clone (Aug 2026), NOT ~/spark-vllm-docker
 RECIPE=qwen3.8-27b-fp8
 [ "${KV_NVME:-0}" = 1 ] && RECIPE=qwen3.8-27b-fp8-kvnvme
+[ "${KV_NVME:-0}" = 1 ] && [ "${KV_NVME_MTP:-0}" = 1 ] && RECIPE=qwen3.8-27b-fp8-kvnvme-mtp
 GPU_MEM="${GPU_MEM:-0.60}"
 
 if [ "${1:-}" = "stop" ]; then
@@ -20,7 +21,7 @@ if [ "${1:-}" = "stop" ]; then
 fi
 
 # Always sync the recipe(s) from this repo (source of truth) to spark-2.
-scp -q qwen3.8-27b-fp8.yaml qwen3.8-27b-fp8-kvnvme.yaml "spark-2:$REMOTE_REPO/recipes/"
+scp -q qwen3.8-27b-fp8.yaml qwen3.8-27b-fp8-kvnvme.yaml qwen3.8-27b-fp8-kvnvme-mtp.yaml "spark-2:$REMOTE_REPO/recipes/"
 
 # Rebuild the image from upstream prebuilt wheels (skip with --no-build, e.g. watchdog).
 # ~40 min on spark-2's WAN; the old image stays as vllm-node:20260409.
@@ -31,9 +32,18 @@ fi
 ssh spark-2 'docker rm -f vllm_node 2>/dev/null' || true
 
 EXTRA_ENV=""
+# jemalloc (if the image ships one) keeps the EngineCore host heap from growing
+# without bound under prompt_logprobs load (see ~/llm/CLAUDE.md memory-leak note).
+JEMALLOC=$(ssh spark-2 "docker run --rm --entrypoint sh vllm-node-aug -c 'ls /usr/local/lib/python3.12/dist-packages/ray/core/libjemalloc.so /usr/lib/aarch64-linux-gnu/libjemalloc.so.2 2>/dev/null | head -1'" 2>/dev/null || true)
+if [ -n "$JEMALLOC" ]; then
+    EXTRA_ENV="-e LD_PRELOAD=$JEMALLOC -e MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
+    echo "jemalloc: $JEMALLOC"
+else
+    echo "jemalloc: not found in image, running without LD_PRELOAD"
+fi
 if [ "${KV_NVME:-0}" = 1 ]; then
     # fs-tier block files are keyed by Python hashes -> must be stable across restarts.
-    EXTRA_ENV="-e PYTHONHASHSEED=0"
+    EXTRA_ENV="$EXTRA_ENV -e PYTHONHASHSEED=0"
     ssh spark-2 'mkdir -p ~/.cache/vllm/kv_nvme'
 fi
 
