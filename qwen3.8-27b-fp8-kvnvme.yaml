@@ -47,5 +47,5 @@ command: |
     --enable-prefix-caching \
     --enable-chunked-prefill \
     --async-scheduling \
-    --kv-transfer-config '{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"spec_name":"TieringOffloadingSpec","cpu_bytes_to_use":8589934592,"eviction_policy":"lru","secondary_tiers":[{"type":"fs","root_dir":"/root/.cache/vllm/kv_nvme","n_read_threads":16,"n_write_threads":8}]}}' \
+    --kv-transfer-config '{{"kv_connector":"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{{"spec_name":"TieringOffloadingSpec","cpu_bytes_to_use":8589934592,"eviction_policy":"lru","secondary_tiers":[{{"type":"fs","root_dir":"/root/.cache/vllm/kv_nvme","n_read_threads":16,"n_write_threads":8}}]}}}}' \
     -tp {tensor_parallel}
