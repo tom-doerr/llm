@@ -6,7 +6,9 @@
 #   KV_NVME=1 [KV_NVME_MTP=1] ./deploy-qwen3.8-27b-fp8.sh -> experimental: KV cache spills to
 #            spark-2's NVMe (vLLM OffloadingConnector fs tier, MTP OFF because
 #            offload+spec-decode is broken upstream). See ~/llm/CLAUDE.md.
-#   GPU_MEM=0.60  -> override --gpu-memory-utilization (default 0.60)
+#   GPU_MEM=0.70  -> override --gpu-memory-utilization (default 0.80; user call Aug 22.
+#            0.85 hard-froze spark-2 historically, so 0.80 is the practical ceiling —
+#            watch MemAvailable on spark-2 under load, fall back to 0.70 if it dips low)
 #   EXTRA_VLLM_ARGS='...' -> appended to the vllm serve command (vLLM takes the LAST
 #            value of a repeated flag, so e.g. '--max-num-batched-tokens 32768' overrides the recipe)
 set -e
@@ -15,7 +17,7 @@ REMOTE_REPO=/home/tom/spark-vllm-docker-aug   # fresh upstream clone (Aug 2026),
 RECIPE=qwen3.8-27b-fp8
 [ "${KV_NVME:-0}" = 1 ] && RECIPE=qwen3.8-27b-fp8-kvnvme
 [ "${KV_NVME:-0}" = 1 ] && [ "${KV_NVME_MTP:-0}" = 1 ] && RECIPE=qwen3.8-27b-fp8-kvnvme-mtp
-GPU_MEM="${GPU_MEM:-0.60}"
+GPU_MEM="${GPU_MEM:-0.80}"
 
 if [ "${1:-}" = "stop" ]; then
     ssh spark-2 'docker rm -f vllm_node 2>/dev/null' || true
