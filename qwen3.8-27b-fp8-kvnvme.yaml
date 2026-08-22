@@ -21,7 +21,7 @@ defaults:
   tensor_parallel: 1
   gpu_memory_utilization: 0.60
   max_model_len: 262144
-  max_num_batched_tokens: 65536
+  max_num_batched_tokens: 16384
 
 env:
   VLLM_MARLIN_USE_ATOMIC_ADD: 1
