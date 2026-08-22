@@ -7,6 +7,8 @@
 #            spark-2's NVMe (vLLM OffloadingConnector fs tier, MTP OFF because
 #            offload+spec-decode is broken upstream). See ~/llm/CLAUDE.md.
 #   GPU_MEM=0.60  -> override --gpu-memory-utilization (default 0.60)
+#   EXTRA_VLLM_ARGS='...' -> appended to the vllm serve command (vLLM takes the LAST
+#            value of a repeated flag, so e.g. '--max-num-batched-tokens 32768' overrides the recipe)
 set -e
 cd "$(dirname "$0")"
 REMOTE_REPO=/home/tom/spark-vllm-docker-aug   # fresh upstream clone (Aug 2026), NOT ~/spark-vllm-docker
@@ -57,7 +59,7 @@ ssh spark-2 "cd $REMOTE_REPO && python3 run-recipe.py $RECIPE \
     -e UCX_MEM_MMAP_HOOK_MODE=none \
     -e VLLM_SLEEP_WHEN_IDLE=1 \
     $EXTRA_ENV \
-    --gpu-mem $GPU_MEM -d -- --generation-config auto --override-generation-config '{\"presence_penalty\":1.0}'"
+    --gpu-mem $GPU_MEM -d -- --generation-config auto --override-generation-config '{\"presence_penalty\":1.0}' ${EXTRA_VLLM_ARGS:-}"
 
 echo "API (clients): http://spark-2:8000/v1   direct: http://192.168.110.2:8000/v1"
 echo "Logs: ssh spark-2 'docker logs -f vllm_node'"

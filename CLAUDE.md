@@ -689,11 +689,29 @@ Qwen3.8 needs transformers ≥5.8, so the Apr-9 `vllm-node` image (kept as
 `vllm-node:20260409`, old checkout `~/spark-vllm-docker` with the user's local mods
 left untouched) cannot load it. One user mod replicated in the new clone:
 launch-cluster.sh `--rm` → `--restart unless-stopped`.
-**Flags:** gpu-mem **0.60** → weights 28.9 GiB, **KV 37 GiB = 545K tokens (vs 12.6 GiB /
-164K on Qwen3.6)**, 2.08x concurrency @262K; `--max-num-batched-tokens 16384`
-(**65536 faults deterministically**: Xid 31 illegal read in an inductor-generated
-Triton kernel of the compiled LM graph during the profiling dummy run — looks like
-int32 index overflow at 65536×51200; 16384 = the upstream Qwen3.8 example value);
+**Flags:** gpu-mem **0.60** → weights 28.9 GiB, **KV 33.6 GiB = 494K tokens (vs 12.6 GiB /
+164K on Qwen3.6)**, 1.89x concurrency @262K; `--max-num-batched-tokens` **32768** — this is only the PREFILL CHUNK per scheduler
+step, NOT the context: `--max-model-len` stays 262144 and a **237,018-token prompt was
+served correctly** (441 tok/s prefill, right answer retrieved; 106,850 tokens @500 tok/s).
+**★ 65536 is an int32 OVERFLOW BUG, root-caused Aug 22:** vLLM's `act_quant` fusion pass
+replaces SiluAndMul+block-quant with the CUDA op `silu_and_mul_per_block_quant`
+(`csrc/libtorch_stable/quantization/fused_kernels/fused_silu_mul_block_quant.cu`) whose
+token offsets are 32-bit: `token_idx * (hidden_size*2)` with stride 2×17408 = 34816
+overflows at token **61,681** (2^31-1 / 34816) → wrapped negative read → Xid 31
+`FAULT_PTE ACCESS_TYPE_VIRT_READ` during the profiling dummy run (the inductor
+autotune frame in the traceback is only the sync point, not the culprit). Sibling
+kernels (`activation_kernels.cu`, `fused_layernorm_dynamic_per_token_quant.cu`) already
+use int64. **Proven by A/B on this box:** 65536 + default fusions = crash; 65536 +
+`-cc.pass_config.fuse_act_quant=false` = **starts and serves** (KV 27.9 GiB, act_quant
+fusion lost); 32768 + both fusions = starts and serves (KV 33.6 GiB). So the ceiling is
+per-model — any model with 2×intermediate ≥ 32768 crosses it at 65536 tokens. 32768 chosen
+= keeps both fusions AND the larger KV, and matches the Spark-community Qwen3.8 recipe;
+61440 would also be safe but leaves no margin. Draft upstream report (NOT filed):
+`~/llm/upstream-report-fused-silu-mul-int32.md`. Override per-deploy without editing the
+recipe: `EXTRA_VLLM_ARGS='--max-num-batched-tokens 61440 -cc.pass_config.fuse_act_quant=false'
+./deploy-qwen3.8-27b-fp8.sh --no-build` (vLLM takes the LAST occurrence of a repeated flag);
+NB `--compilation-config '{...}'` cannot be passed through run-recipe (its str.format
+templating mangles the JSON) — use the `-cc.x.y=z` dotted form.
 MTP `{"method":"mtp","num_speculative_tokens":3}` (acceptance 52-72% measured);
 `--tool-call-parser qwen3_xml --reasoning-parser qwen3`, flashinfer, fastsafetensors,
 prefix caching (mamba cache mode auto=`align` → **attention block = 800 tokens →
