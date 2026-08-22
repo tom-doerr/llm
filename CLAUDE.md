@@ -495,6 +495,32 @@ If counters increase, IB is working. For detailed logs: `./start-vllm-multinode.
 
 ### TP vs PP vs DP Mode
 
+**★ UNEVEN SPLITS: TP CANNOT, PP CAN (verified in source Aug 19 2026).**
+TP is structurally uniform for TWO independent reasons: (1) vLLM asserts it —
+`divide()` → `ensure_divisibility` (`distributed/utils.py:53`) is called on
+every shard dim (`linear.py:451` output, `:1403` input, `:1004` heads), so a
+non-divisible size raises at load; (2) deeper and unpatchable — NCCL collectives
+take ONE `count` that every rank must agree on (no `allgatherv` in NCCL, unlike
+MPI), so unequal shards break the collective contract even if you removed the
+asserts. NB one divisibility case is handled by REPLICATION not error: if
+`tp_size > total_num_kv_heads`, `linear.py:1007` sets `num_kv_head_replicas`
+and copies KV heads across ranks (GQA models).
+**PP takes an EXPLICIT uneven layer map: `VLLM_PP_LAYER_PARTITION="a,b"`**
+(`envs.py:49`, parsed `distributed/utils.py:111-122`) — validates
+`len(partitions)==pp_size` and `sum(partitions)==num_hidden_layers`, else
+raises. Even the DEFAULT path is uneven when layers%pp_size≠0 (remainder goes
+to all but the last partition, which carries an extra norm layer). Why the
+asymmetry: TP shards WITHIN every layer (all-reduce per layer → needs uniform
+buffers + huge BW); PP splits BETWEEN layers (only boundary activations cross,
+point-to-point → any partition works, far less BW).
+**★ This is exactly what killed the Feb PP=3 397B attempt** ("spark-1 only has
+~58 GB free (needs ~75 GB/stage)") — an uneven partition giving spark-1 fewer
+layers was the available fix and was not tried.
+**Practical catch:** `--gpu-memory-utilization` is ONE scalar applied to every
+worker (fraction of TOTAL memory, 128 GB on all sparks), so it cannot express
+"spark-3 is busy, give it less" — set it low enough for the most constrained
+node, or use `kv_cache_memory_bytes` (absolute, also single-valued; skips
+profiling — see `gpu_worker.py:344`).
 **TP (default):** `./start-vllm-multinode.sh` - Tensor parallel, splits model across GPUs
 **PP mode:** `./start-vllm-multinode.sh --pp` - Pipeline parallel, layers split across GPUs
 **DP mode:** `./start-vllm-multinode.sh --dp` - Data parallel, full model per node
@@ -647,9 +673,71 @@ Peak: **211 dec/s** at c=32. c=1 slow due to pipeline bubble. Stability: passed 
 **Multi-node UNSTABLE:** TP=2 crashes ~27-40 min, DP=2 ~24 min (MoE EP NCCL sync).
 **Single-node is the stable deployment** for this model. 0.85 util → hard freeze.
 
+## Qwen3.8-27B-FP8 (Aug 22 2026) — CURRENT on spark-2
+
+**Status: RUNNING single-node (solo, TP=1) on spark-2, clients `http://spark-2:8000/v1`
+(Tailscale Service name `vllm.tail620cfa.ts.net:8000` once approved — see ~/CLAUDE.md
+"Service endpoints").** Model `Qwen/Qwen3.8-27B-FP8` (dense 27B, Qwen3.5 hybrid-GDN
+arch, native VLM, MTP head, 262K ctx; 29 GB in spark-2's HF cache).
+**Deploy:** `~/llm/deploy-qwen3.8-27b-fp8.sh [stop|--no-build]` (= `deploy.sh`, the
+watchdog target); recipe `~/llm/qwen3.8-27b-fp8.yaml` (source of truth, scp'd to
+`spark-2:~/spark-vllm-docker-aug/recipes/` on every deploy). **Needs the Aug-2026
+image `vllm-node-aug`** (vLLM 0.26.1rc1.dev1105 nightly of Aug 22, transformers
+5.15, torch 2.13, built from a FRESH upstream clone `~/spark-vllm-docker-aug` with
+`build-and-copy.sh -t vllm-node-aug --use-wheels`, 58 min on spark-2's 8.7 MB/s WAN) —
+Qwen3.8 needs transformers ≥5.8, so the Apr-9 `vllm-node` image (kept as
+`vllm-node:20260409`, old checkout `~/spark-vllm-docker` with the user's local mods
+left untouched) cannot load it. One user mod replicated in the new clone:
+launch-cluster.sh `--rm` → `--restart unless-stopped`.
+**Flags:** gpu-mem **0.60** → weights 28.9 GiB, **KV 37 GiB = 545K tokens (vs 12.6 GiB /
+164K on Qwen3.6)**, 2.08x concurrency @262K; `--max-num-batched-tokens 16384`
+(**65536 faults deterministically**: Xid 31 illegal read in an inductor-generated
+Triton kernel of the compiled LM graph during the profiling dummy run — looks like
+int32 index overflow at 65536×51200; 16384 = the upstream Qwen3.8 example value);
+MTP `{"method":"mtp","num_speculative_tokens":3}` (acceptance 52-72% measured);
+`--tool-call-parser qwen3_xml --reasoning-parser qwen3`, flashinfer, fastsafetensors,
+prefix caching (mamba cache mode auto=`align` → **attention block = 800 tokens →
+prompts shorter than 800 tokens NEVER hit**, repeats of a 4.9K prompt hit 4000
+tokens, TTFT 4.1 → 0.87 s; hits also show up only from the 2nd repeat), chunked
+prefill, async scheduling, bf16 KV (fp8 KV deliberately NOT used: Qwen3.5-122B
+corruption precedent), jemalloc LD_PRELOAD auto-detected, `VLLM_SLEEP_WHEN_IDLE=1`,
+presence_penalty 1.0 override kept from the 3.6 deploy. Recipe JSON needs `{{ }}`
+(run-recipe uses str.format). NO chat-template mod (the repo template carries
+enable_thinking / preserve_thinking / reasoning_effort).
+**Measured (Aug 22, production load, 21-36 concurrent):** aggregate gen 28-63 tok/s
+avg, peaks 173 tok/s, prompt 500-1860 tok/s; a cold engine JIT-compiles Triton
+kernels (eagle/rotary/FLA gating) on the FIRST requests → TTFT 56-230 s for ~2 min
+after every (re)deploy. ⚠ This dense 27B is far slower per token than the 35B-A3B
+MoE it replaced (Qwen3.6 peaked 341 tok/s @c=256) — the throughput drop is the model
+choice, not a bug; NVFP4 (+30 % per forum) or DFlash draft are the known levers.
+spark-2 memory: MemAvailable 35 GB right after start → 22 GB after 15 min of load
+(allocator growth) at gpu-mem 0.60 — raise to 0.65-0.70 only with that in mind.
+**Watchdog gotcha:** `vllm-watchdog` redeploys `deploy.sh --no-build` after 3 fails —
+during an experiment's 4-5 min downtime it WILL overwrite the experiment with the
+default recipe (it did, Aug 22 17:02). `systemctl --user stop vllm-watchdog` first.
+**Hard-coded model ids rewritten** (dotfiles `scripts/served-model-name`): soarm
+dspy_arm/tools_*, x_twitter insight scripts, aichat, llm-cli yaml, opencode.json;
+long-running clients that cached the old id (x_twitter `dspy-post-pipeline-worker`,
+interactive `idea-tui`s) 404 until restarted — vast.ai defaults stay Qwen3.6.
+**★ KV cache on NVMe — MEASURED Aug 22, NOT ENABLED (opt-in `KV_NVME=1 [KV_NVME_MTP=1]
+./deploy-qwen3.8-27b-fp8.sh`, recipes `qwen3.8-27b-fp8-kvnvme[-mtp].yaml`, validator
+`kv_nvme_validate.py`).** vLLM-native `OffloadingConnector` + `TieringOffloadingSpec`
+(8 GiB CPU tier = /dev/shm mmap, fs tier `~/.cache/vllm/kv_nvme` on spark-2's NVMe),
+needs `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False` (recipe env; launcher sets
+True) and `PYTHONHASHSEED=0`. Works WITH MTP on this nightly (scheduler excludes the
+draft groups' trailing chunk). Findings: overhead negligible (1.2 GB/min written,
+0.06 s/min offload time, lookup delay ~0), temperature-0 text identical across 3
+repeats and across a restart, BUT (1) **the fs tier has NO capacity control — 30 GB in
+~25 min under load (~1.7 TB/day)**, needs an external pruner; (2) production prompts
+are <800 tokens → 0 hits either way; (3) cross-restart serve from disk could not be
+shown (post-restart TTFT 230 s = JIT storm + 36 queued requests). LMCache rejected
+for now: hybrid+disk silent-corruption bugs open (#4247/#4674/#4701). Revisit when a
+pruner exists and long-prefix agent traffic dominates. Files are root-owned → delete via
+`docker run --rm --entrypoint sh -v ~/.cache/vllm:/x vllm-node-aug -c 'rm -rf /x/kv_nvme'`.
+
 ## Qwen3.6-35B-A3B-FP8 (Apr 2026)
 
-**Status:** RUNNING single-node (`--solo --tp 1`) on spark-2 only. (Was TP=2 head/worker; deploy script switched to solo.)
+**Status:** SUPERSEDED Aug 22 2026 by Qwen3.8-27B-FP8 (section above); was RUNNING single-node (`--solo --tp 1`) on spark-2.
 **Model:** `Qwen/Qwen3.6-35B-A3B-FP8` (35B total, 3B active per token)
 **Deploy:** `deploy-qwen3.6-35b-fp8.sh` | **Recipe:** `qwen3.6-35b-a3b-fp8.yaml`
 **API:** `http://192.168.110.2:8000/v1`
@@ -739,9 +827,41 @@ BGE embeddings running alongside vLLM worker on spark-3.
 
 ## Multi-Model on Dual Spark (Mar 2026)
 
-**Two TP=2 instances on same GPU pair: NOT POSSIBLE.** No MIG on GB10, NCCL requires exclusive GPU access, Ray can't share GPUs between TP groups.
+**★ CORRECTED Aug 19 2026 — "Two TP=2 instances on same GPU pair: NOT
+POSSIBLE" was WRONG in one of its three reasons.** No MIG on GB10: TRUE.
+"Ray can't share GPUs between TP groups": **FALSE** — `VLLM_RAY_PER_WORKER_GPUS`
+(default 1.0, `vllm/envs.py:130`, consumed at `v1/executor/ray_executor.py:161`)
+sets the fractional GPU each Ray worker requests; `=0.5` lets two TP=2 groups
+place on the same physical GPU pair. "NCCL requires exclusive GPU access":
+overstated — separate communicators coexist, but NCCL collective kernels
+SPIN on the SMs, so two TP groups time-slicing one GPU can livelock (a
+collective can't finish while the peer's kernel is descheduled). That is the
+real hazard, not a placement rule.
+**The ACTUAL blocker on GB10 is UMA memory, not software.** Both instances'
+weights+KV+activations must fit the same 128 GB on BOTH nodes. Measured Aug 19:
+spark-2 serving 35B-A3B-FP8 solo at 0.50 util had **1.9 GB MemAvailable** —
+zero room for a second anything. Budget rule: `--gpu-memory-utilization` must
+SUM to <~0.85 across all instances on a node.
+**Mitigations if attempted:** `VLLM_SLEEP_WHEN_IDLE=1` (already in the deploy)
+is REQUIRED, not optional — without it each TP group busy-polls at ~96% util
+(documented above) and two pollers fight forever. **CUDA MPS is available on
+GB10** (`/usr/bin/nvidia-cuda-mps-control` present, compute mode Default,
+verified Aug 19, UNTESTED here): MPS runs kernels from multiple processes in
+one context instead of time-slicing, which is the specific defence against the
+NCCL spin-wait livelock. Each instance also needs its own port + its own Ray
+cluster (distinct ports) or shared-cluster placement groups.
 **One vLLM instance, two models: NOT SUPPORTED.** Each vLLM process loads exactly one model.
-**Alternatives:** Two single-node TP=1 (one model per Spark), sleep mode time-sharing (`--enable-sleep-mode`, ~0.3-2.5s switch), LoRA adapters (same base model only), LiteLLM proxy for routing.
+**★ SLEEP MODE IS NEARLY USELESS FOR MEMORY ON UMA (verified in source Aug 19,
+`v1/worker/gpu_worker.py:157`).** Level 1 = `allocator.sleep(offload_tags=
+("weights",))` → copies weights to a HOST tensor, frees the GPU-side physical
+handles. On a discrete GPU that frees VRAM; on GB10 host RAM IS the same
+128 GB, so **net physical RAM freed ≈ 0**. Only gain: the host copy is
+pageable, so a sleeping model can be pushed to zswap/swap (waking then pays a
+swap-in). Level 2 = `offload_tags=()` → discards weights entirely, genuinely
+frees RAM, but wake reloads from disk. So on this box, time-sharing = level 2
++ reload cost, NOT the "~0.3-2.5s switch" that discrete-GPU docs advertise.
+**Alternatives:** Two single-node TP=1 (one model per Spark), sleep mode level-2
+time-sharing, LoRA adapters (same base model only), LiteLLM proxy for routing.
 **A tiny model (e.g., 0.8B) CAN coexist** alongside TP=2 as a separate single-node vLLM instance on one of the Sparks — uses minimal memory/compute, no NCCL conflict.
 
 ## Instruct vs Thinking Variants
