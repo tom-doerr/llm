@@ -3,7 +3,7 @@
 import time, base64, json, requests, os
 
 V = '/home/tom/Videos/britney_max.mp4'
-U = 'http://192.168.110.2:8000/v1/chat/completions'
+U = 'http://spark-2:8000/v1/chat/completions'
 M = 'Intel/Qwen3.5-122B-A10B-int4-AutoRound'
 O = os.path.expanduser('~/llm/benchmark_results/britney_max_description.txt')
 P = ('Describe every second of this video individually, '

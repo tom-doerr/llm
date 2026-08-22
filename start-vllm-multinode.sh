@@ -107,4 +107,4 @@ ssh spark-2 "docker run -d --name vllm-head --gpus all --shm-size 16g \\
 echo "=== Containers started ==="
 echo "Head logs:   ssh spark-2 'docker logs -f vllm-head'"
 echo "Worker logs: ssh spark-3 'docker logs -f vllm-worker'"
-echo "API:         http://192.168.110.2:8000/v1/chat/completions"
+echo "API:         http://spark-2:8000/v1/chat/completions"

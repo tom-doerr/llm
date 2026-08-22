@@ -6,7 +6,7 @@ import urllib.request
 from PIL import Image
 import numpy as np
 
-API = "http://192.168.102.11:8000/v1/chat/completions"
+API = "http://spark-2:8000/v1/chat/completions"
 
 def make_png(w, h):
     arr = np.zeros((h, w, 3), dtype=np.uint8)
