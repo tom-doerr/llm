@@ -1,4 +1,10 @@
-# Draft bug report (NOT filed) — vLLM: int32 overflow in fused silu_and_mul block-quant kernel
+# FILED as vllm-project/vllm#53390 (Aug 22 2026) — int32 overflow in fused silu_and_mul block-quant kernel
+
+**Issue: https://github.com/vllm-project/vllm/issues/53390** — standalone repro:
+`~/llm/repro_int32_silu_mul_block_quant.py` (run inside the vllm container:
+`docker cp ... vllm_node:/tmp/ && docker exec vllm_node python3 /tmp/repro_int32.py 61681 61682`).
+**Boundary CONFIRMED on hardware: 61,681 tokens OK, 61,682 = illegal memory access + Xid 31**
+(the vLLM server in another CUDA context was unaffected).
 
 **Title:** `[Bug] silu_and_mul_per_block_quant`: int32 token-offset overflow → illegal memory
 access above ~2^31/(2*intermediate_size) batched tokens (Qwen3.8-27B-FP8, `--max-num-batched-tokens 65536`)

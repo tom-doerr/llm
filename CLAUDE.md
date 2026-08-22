@@ -706,8 +706,11 @@ use int64. **Proven by A/B on this box:** 65536 + default fusions = crash; 65536
 fusion lost); 32768 + both fusions = starts and serves (KV 33.6 GiB). So the ceiling is
 per-model — any model with 2×intermediate ≥ 32768 crosses it at 65536 tokens. 32768 chosen
 = keeps both fusions AND the larger KV, and matches the Spark-community Qwen3.8 recipe;
-61440 would also be safe but leaves no margin. Draft upstream report (NOT filed):
-`~/llm/upstream-report-fused-silu-mul-int32.md`. Override per-deploy without editing the
+61440 would also be safe but leaves no margin. **FILED upstream: https://github.com/vllm-project/vllm/issues/53390** (write-up
+`~/llm/upstream-report-fused-silu-mul-int32.md`, standalone repro
+`~/llm/repro_int32_silu_mul_block_quant.py` — boundary confirmed on hardware: 61,681
+tokens OK, 61,682 = illegal access; a faulting kernel in a separate CUDA context does
+NOT disturb the running vLLM server). Override per-deploy without editing the
 recipe: `EXTRA_VLLM_ARGS='--max-num-batched-tokens 61440 -cc.pass_config.fuse_act_quant=false'
 ./deploy-qwen3.8-27b-fp8.sh --no-build` (vLLM takes the LAST occurrence of a repeated flag);
 NB `--compilation-config '{...}'` cannot be passed through run-recipe (its str.format
