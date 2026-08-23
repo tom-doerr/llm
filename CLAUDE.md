@@ -673,9 +673,31 @@ Peak: **211 dec/s** at c=32. c=1 slow due to pipeline bubble. Stability: passed 
 **Multi-node UNSTABLE:** TP=2 crashes ~27-40 min, DP=2 ~24 min (MoE EP NCCL sync).
 **Single-node is the stable deployment** for this model. 0.85 util → hard freeze.
 
-## Qwen3.8-27B-FP8 (Aug 22 2026) — CURRENT on spark-2
+## Qwen3.6-35B-A3B-FP8 on the Aug-2026 stack — CURRENT on spark-2 (since Aug 23 2026)
 
-**Status: RUNNING single-node (solo, TP=1) on spark-2, clients `http://spark-2:8000/v1`
+**Status: RUNNING single-node (solo, TP=1), `http://spark-2:8000/v1`, model id
+`Qwen/Qwen3.6-35B-A3B-FP8`.** Switched BACK from Qwen3.8-27B on Aug 23 (user call) after
+the measured comparison below: the dense 27B was 3.4x slower per token and completed 46%
+fewer requests/hour on the same workload.
+**Deploy: `~/llm/deploy-qwen3.6-35b-a3b-fp8.sh` (= `deploy.sh`, the watchdog target).**
+It keeps the two wins from the Qwen3.8 era: the **`vllm-node-aug` image** (vLLM
+0.26.1rc1.dev1105, transformers 5.15, torch 2.13, clone `spark-2:~/spark-vllm-docker-aug`)
+and **gpu-mem 0.80** — recipe is upstream's `qwen3.6-35b-a3b-fp8` (`-t vllm-node-aug`,
+`--solo --tp 1`, `--max-num-batched-tokens 65536`; the int32 overflow of vllm#53390 cannot
+trigger on this MoE, its per-expert intermediate is tiny).
+**Result vs the old 0.50 deployment of the same model: weights 34.5 GiB, KV 49.08 GiB =
+4,875,481 tokens, 18.6x concurrency @262K — 30x the token capacity it had at gpu-mem 0.50
+(12.6 GiB / 164K).** First measurements after the switch: TTFT 0.24 s, 9.2 tok/s single
+stream on a busy engine, 264 tok/s aggregate generation + 2,800 tok/s prefill at 40
+concurrent, KV usage 10%, zero waiting. spark-2 MemAvailable ~7 GB under load.
+The old pre-Aug-22 path (`deploy-qwen3.6-35b-fp8.sh`, image `vllm-node:20260409`,
+gpu-mem 0.50) still exists as a fallback if the new image ever misbehaves.
+
+## Qwen3.8-27B-FP8 (Aug 22 2026) — tried for ~15 h, reverted Aug 23
+
+**Status: NOT RUNNING (reverted Aug 23 2026 — too slow, see the comparison below; the
+29 GB model stays in spark-2's HF cache and `deploy-qwen3.8-27b-fp8.sh` still works).**
+Was: single-node (solo, TP=1) on spark-2, clients `http://spark-2:8000/v1`
 (Tailscale Service name `vllm.tail620cfa.ts.net:8000` once approved — see ~/CLAUDE.md
 "Service endpoints").** Model `Qwen/Qwen3.8-27B-FP8` (dense 27B, Qwen3.5 hybrid-GDN
 arch, native VLM, MTP head, 262K ctx; 29 GB in spark-2's HF cache).

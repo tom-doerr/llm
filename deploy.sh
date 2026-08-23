@@ -1,0 +1,1 @@
+deploy-qwen3.6-35b-a3b-fp8.sh
