@@ -740,6 +740,38 @@ default recipe (it did, Aug 22 17:02). `systemctl --user stop vllm-watchdog` fir
 dspy_arm/tools_*, x_twitter insight scripts, aichat, llm-cli yaml, opencode.json;
 long-running clients that cached the old id (x_twitter `dspy-post-pipeline-worker`,
 interactive `idea-tui`s) 404 until restarted — vast.ai defaults stay Qwen3.6.
+**★★ BEFORE/AFTER vs the Qwen3.6-35B-A3B MoE it replaced — MEASURED from Prometheus
+(same production workload, LOAD-MATCHED buckets, Aug 22-23 2026).** Windows: 3.6 @0.50
+Aug 22 00:00-16:20 (16.3 h) vs 3.8 @0.80 Aug 22 20:10 - Aug 23 07:50 (11.7 h); rows below
+are the concurrency-32-39 bucket (n=37 vs 25 fifteen-minute samples), which removes the
+"was it just busier?" confounder — every other bucket (24-31, 40-47, 48-55) shows the
+same ratios.
+
+| metric (concurrency 32-39) | Qwen3.6-35B-A3B | Qwen3.8-27B | change |
+|---|---|---|---|
+| inter-token latency p50 | 136 ms | 468 ms | **3.4x slower** |
+| per-stream decode | 7.4 tok/s | 2.1 tok/s | −71% |
+| aggregate output | 185 tok/s | 114 tok/s | −38% |
+| prefill | 1515 tok/s | 758 tok/s | −50% |
+| TTFT p50 | 2.3 s | 8.7 s | 3.8x |
+| E2E p50 | 80 s | 152 s | 1.9x |
+| requests completed | 851/h | 463/h | **−46%** |
+| prompt tokens/request | 5633 | 4370 | (workload, −22%) |
+
+**Mechanism: decode is memory-bandwidth-bound and a dense 27B reads ~8x more weight bytes
+per token than a 3B-active MoE** (~27 GB vs ~3.5 GB at FP8; GB10 has ~273 GB/s → ~10 tok/s
+single-stream ceiling for the dense model, measured 5.8 tok/s while also serving
+production). MTP recovers some of it (52-57% acceptance measured) and is already on.
+Levers if the speed matters more than the model: NVFP4 weights (+~30% per NVIDIA forum),
+the DFlash draft recipe (`z-lab/Qwen3.8-27B-DFlash2`, 8 spec tokens, in eugr's README),
+or going back to an A3B-class MoE. Prefill is also 2x slower, so long-context work costs
+double.
+**The gpu-mem 0.60 -> 0.80 raise (Aug 22 19:47) was a clear win WITHIN the new model:**
+preemptions 55/h -> 0, waiting queue 5.7 -> 0.1 reqs, prefix-cache hit rate 8% -> 33%,
+E2E p50 190 s -> 103 s. ITL p50 got marginally worse (441 -> 490 ms) because more requests
+now run concurrently — the right trade. Cost: spark-2 MemAvailable ~5 GB under load
+(was 22-35 GB at 0.60); 0.85 hard-froze this box historically, so 0.80 is the ceiling.
+
 **★ KV cache on NVMe — MEASURED Aug 22, NOT ENABLED (opt-in `KV_NVME=1 [KV_NVME_MTP=1]
 ./deploy-qwen3.8-27b-fp8.sh`, recipes `qwen3.8-27b-fp8-kvnvme[-mtp].yaml`, validator
 `kv_nvme_validate.py`).** vLLM-native `OffloadingConnector` + `TieringOffloadingSpec`
