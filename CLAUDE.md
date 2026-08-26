@@ -572,6 +572,103 @@ Docker `--restart=no` (auto-restart disabled — caused crash loops). Head entry
 **Watchdog** (`vllm-watchdog.sh`) on spark-1: polls every 60s, saves crash logs from both nodes to `crash-logs/<timestamp>/`, then calls `deploy-122b-fp8.sh` after 3 fails. ~8 min total recovery.
 **Entrypoints:** `vllm-head-entrypoint.sh` (Ray head + vLLM retry), `vllm-worker-entrypoint.sh` (Ray worker with retry-connect).
 
+## LTX-2.5 video (researched Aug 26 2026) — THE FORMULA INVERTS FOR DIFFUSION
+
+**★★ The `tok/s ≤ BW / active_bytes_per_token` law applies ONLY to memory-bound
+AUTOREGRESSIVE decode. Video diffusion is COMPUTE-bound and flips every
+conclusion about weight streaming.** Not cached locally as of Aug 26.
+
+**Specs:** 22B asymmetric dual-stream DiT (video+audio joint, bidirectional
+cross-attn). Distilled = **fixed 8-sigma schedule, DistilledPipeline 8 steps
+stage1 + 4 stage2 = 12 forward passes** (vs 30-50 undistilled). Precisions
+bf16 / fp8-cast / **NVFP4 (Blackwell-native = GB10)** / comfy int8. Separate
+text encoder **gemma4-12b-with-proj** (12B, runs ONCE per gen, evictable) + video
+VAE (DiffVAE heavy / Conv light) + audio VAE + duration head.
+VAE downsamples **32×32×8, compression 1:192** → 128 latent channels
+(8192 px × 3 / 128 = 192 ✓). `num_frames % 8 == 1`, max tested 121 (≈5 s @24 fps),
+W/H divisible by 32.
+
+**Latent tokens = (W/32)×(H/32)×((F-1)/8+1).** 1280×704×121 → 40×22×16 =
+**~14,080 tokens, generated ALL AT ONCE per step, not autoregressively** — so
+"tok/s" is not a meaningful unit here; use s/step and steps/video.
+
+**Why it inverts:** weights are read ONCE PER STEP and reused across all ~14k
+tokens → arithmetic intensity ≈ 2L/bytes_per_param ≈ **14,080 FLOP/byte** (bf16)
+vs LLM decode's ~2. GB10 ridge point ≈ 125 TFLOPS ÷ 273 GB/s ≈ **458 FLOP/byte**
+→ video DiT sits ~30x on the COMPUTE-bound side.
+
+**Consequences:** (1) streaming weights from pooled NVMe costs ~nothing —
+22 GB fp8 ÷ 30 GB/s = 0.73 s/step against ~10 s/step of compute, and a DiT has
+FIXED layer order so prefetch is PERFECT (no MoE router speculation). (2) But
+it's MOOT: 22B fp8 (22 GB) + encoder (12 GB) = **~34 GB, fits one spark easily**;
+bf16 ~68 GB also fits. (3) **The real bottleneck is FLOPs:** ~2×22e9×14,080 ≈
+620 TFLOP/step → ~10 s/step at ~50% MFU → **~2 min per 5 s clip**. The lever is
+NVFP4 (Blackwell-native, ~4x bf16), NOT memory or the fabric. NB our notes
+record NVFP4 breakage on sm_121a under vLLM — LTX runs via the LTX-2 package /
+ComfyUI / SGLang (SGLang has an LTX2.5 cookbook page), so re-test there.
+
+## Weight Streaming from Pooled NVMe over RDMA (analysed Aug 26 2026)
+
+**Idea:** serve weights from all 3 sparks' NVMes over the 200G fabric into
+whichever spark is running the model. **Verdict: only worth it for models that
+do NOT fit in 384 GB of combined UMA. Everything currently run is ~9x faster
+resident.**
+
+**THE LAW OF DECODE: `tok/s ≤ weight_bandwidth / active_bytes_per_token`.**
+Every token reads every ACTIVE weight once. Validated against our own numbers:
+122B-A10B-FP8 = 10 GB active/token, GB10 UMA ≈ 273 GB/s → predicts 27 tok/s,
+we measure 19-20 at c=1 (~70% eff) = textbook memory-bound. Use this to
+sanity-check any streaming proposal BEFORE building it.
+
+**Measured bandwidth tiers (Aug 19 2026 benchmarks):**
+| Tier | BW |
+|------|-----|
+| Local UMA (RAM) | ~273 GB/s |
+| Local NVMe QD32 | 9.5-11.5 GB/s |
+| One RDMA link | ~12.6-14.2 GB/s (101-114 Gb/s) |
+| Dual-rail to one peer | ~26 GB/s |
+| **All 3 NVMes pooled into 1 spark** | **~30 GB/s** (9.5+9.0+11.5) |
+
+So streaming is **~9x slower than local RAM**. Consequences: dense 120 GB model
+= 0.25 tok/s (hopeless); 397B-A17B int4 (8.5 GB active) = 3.5 tok/s vs the
+**15.6 tok/s llama.cpp already gets with weights resident on 2 sparks**;
+671B-A37B FP8 (37 GB active) = 0.8 tok/s — slow, but the alternative is
+"cannot run at all". Free NVMe across the fleet ≈ 3.9 TB, so capacity is never
+the constraint; bandwidth is.
+
+**Batching is the multiplier that makes it viable:** a weight read is amortised
+over the whole batch, so streaming is an OFFLINE/BATCH technique, not an
+interactive one. Single-stream latency stays bad no matter what.
+
+**Prefetchability differs by architecture:** DENSE = layer L+1 is known while
+computing L → perfect prefetch, latency fully hidden, pure bandwidth problem.
+MoE = expert choice comes from the router AT that layer → cannot prefetch
+without speculation. Mitigations: predict from the previous layer's hidden
+state, or keep HOT experts resident (expert popularity is heavily skewed, so a
+small LRU cache absorbs most traffic — what llama.cpp `-ot`/KTransformers do).
+
+**Transport — all modules VERIFIED PRESENT on all 3 sparks (Aug 26 2026):**
+`nvmet`, `nvmet-rdma`, `nvme-rdma`, `nvme-fabrics` (+ `rtrs-client` on spark-1),
+`nvme-cli` at /usr/sbin/nvme. Recipe: `nvmet-rdma` target on the donors,
+`nvme connect -t rdma` on the consumer, then md RAID0 across local+2 remote for
+aggregate BW. **NVMe-oF target costs the DONOR almost nothing** (NVMe→NIC DMA,
+no GPU, minimal CPU) → spark-3 can serve weights while finetuning. That is the
+key property: it is the one fabric use that does not need a free GPU.
+**GPUDirect Storage is NOT available** (no dma-buf/nvidia-peermem on GB10) but
+this matters LESS here than on a discrete GPU: NVMe DMAs into host DRAM which
+IS GPU-accessible on UMA → the usual host→device copy disappears.
+
+**Consumer stacks:** (1) **llama.cpp mmap = the only stack that streams at
+inference time TODAY, for free** — it mmaps the GGUF and the page cache
+demand-pages; point it at the NVMe-oF RAID0 and add `-ot` to pin
+attention/shared tensors while experts stream. (2) **vLLM has the MACHINERY but
+aimed at the wrong tier** — `vllm/config/offload.py`: `PrefetchOffloadConfig`
+(`offload_group_size`, `offload_prefetch_step`, `offload_params={"experts"}`,
+async H2D prefetch N layers ahead) and `UVAOffloadConfig` (`cpu_offload_gb`,
+zero-copy from pinned host memory). **On UMA both are capacity NO-OPS — "CPU
+memory" is the same 128 GB** (same trap as sleep-mode level 1). Backing that
+prefetch hook with mmap'd remote NVMe instead of host RAM is the real project.
+
 ## Model Cache (Jan 2026)
 
 **spark-2** (~700GB): AWQ Instruct/Thinking (116+117G), NVFP4 variants (127G each), BF16 Thinking (214G), Qwen3.5-122B-A10B: FP8 (119G), AWQ-4bit (75G), NVFP4 (71G)
