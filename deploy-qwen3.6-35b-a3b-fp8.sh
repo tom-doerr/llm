@@ -2,21 +2,20 @@
 # Deploy Qwen3.6-35B-A3B-FP8 single-node (TP=1) on spark-2, on the Aug-2026 image.
 # Switched back to this model Aug 23 2026 (user call): the dense Qwen3.8-27B measured
 # 3.4x slower per token / -46% requests-per-hour on the same workload (see CLAUDE.md).
-# Kept from the Qwen3.8 era: vllm-node-aug image (vLLM 0.26.1 nightly) + gpu-mem 0.80.
+# Kept from the Qwen3.8 era: vllm-node-aug image (vLLM 0.26.1 nightly).
 # Clients:   http://spark-2:8000/v1  (later: http://vllm.tail620cfa.ts.net:8000/v1)
 # Direct:    http://192.168.110.2:8000/v1  (RDMA link, host-management tools only)
 # Usage: ./deploy-qwen3.6-35b-a3b-fp8.sh [stop|--no-build]
 #   (the KV_NVME variants live in deploy-qwen3.8-27b-fp8.sh)
-#   GPU_MEM=0.70  -> override --gpu-memory-utilization (default 0.80; user call Aug 22.
-#            0.85 hard-froze spark-2 historically, so 0.80 is the practical ceiling —
-#            watch MemAvailable on spark-2 under load, fall back to 0.70 if it dips low)
+#   GPU_MEM=...   -> override --gpu-memory-utilization (default 0.70; user call Aug 28).
+#            0.85 hard-froze spark-2 historically; watch MemAvailable under load.
 #   EXTRA_VLLM_ARGS='...' -> appended to the vllm serve command (vLLM takes the LAST
 #            value of a repeated flag, so e.g. '--max-num-batched-tokens 32768' overrides the recipe)
 set -e
 cd "$(dirname "$0")"
 REMOTE_REPO=/home/tom/spark-vllm-docker-aug   # fresh upstream clone (Aug 2026), NOT ~/spark-vllm-docker
 RECIPE=qwen3.6-35b-a3b-fp8      # upstream recipe, ships with the clone
-GPU_MEM="${GPU_MEM:-0.80}"
+GPU_MEM="${GPU_MEM:-0.70}"
 
 if [ "${1:-}" = "stop" ]; then
     ssh spark-2 'docker rm -f vllm_node 2>/dev/null' || true
@@ -49,8 +48,8 @@ if [ "${KV_NVME:-0}" = 1 ]; then
     ssh spark-2 'mkdir -p ~/.cache/vllm/kv_nvme'
 fi
 
-# Solo, TP=1, gpu-mem 0.80 (~97 GiB budget): ~35 GiB weights leaves ~50 GiB of KV,
-# i.e. ~4x the 12.6 GiB this model had at 0.50. 65536 batched tokens is safe for this
+# Solo, TP=1, gpu-mem 0.70: ~35 GiB weights leaves ~37 GiB of KV (about 3.69M tokens).
+# 65536 batched tokens is safe for this
 # MoE (its per-expert intermediate is small, so the int32 overflow of vllm#53390 —
 # which caps the dense 27B at 32768 — cannot trigger here).
 # Watch MemAvailable on spark-2 under load; 0.85 hard-froze this box historically.
