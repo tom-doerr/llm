@@ -949,7 +949,7 @@ Wins at high concurrency vs 122B int4 (1.4x at c=64+), loses at low c (dense vs 
 **Model:** `Qwen/Qwen3.5-0.8B` (0.8B dense) | **Container:** `vllm/vllm-openai:cu130-nightly`
 **Memory:** 1.72 GiB model, 0.1 util, 4K context, enforce-eager.
 **API:** `http://localhost:8000/v1/chat/completions`
-**Grafana:** http://localhost:3000/d/vllm-spark1 | **Prometheus job:** `vllm-spark1`
+**Grafana:** http://localhost:3000/d/vllm-spark1 | **Prometheus job:** `vllm-spark1` (scrape job REMOVED from the NAS Prometheus on Oct 2 2026: the target had been down for weeks; re-add it to `/pool/services/prometheus/config/prometheus.yml` if a model is served on spark-1:8000 again)
 **Benchmark (single-node, Mar 2026):** Peak **655 dec/s** at c=64.
 
 ## Qwen3.5-397B-A17B-NVFP4 (Feb 2026)
@@ -1080,10 +1080,10 @@ Can be dramatically faster. May OOM in TP scenarios.
 **URL:** http://localhost:3000/d/vllm-spark
 **Title:** "Inference Server (spark-2/spark-3)" — unified for vLLM + llama.cpp
 
-**Metrics:** All vLLM queries filter `{job="vllm"}` to exclude spark-1 (0.8B) data. Queries use `or` for `llamacpp:` prefixes. Prometheus jobs: `vllm` (spark-2:8000), `vllm-spark1` (localhost:8000).
+**Metrics:** All vLLM queries filter `{job="vllm"}` to exclude spark-1 (0.8B) data. Queries use `or` for `llamacpp:` prefixes. Prometheus jobs: `vllm` (spark-2:8000); `vllm-spark1` was removed Oct 2 2026.
 
 **Exporters:** :8000 (vLLM or llama.cpp), node_exporter :9100 (spark-1/2/3). GPU metrics via `gpu-metrics.sh` → textfile collector (no DCGM on ARM64). Includes throttle counters, SoC thermal zones, P-state, zram backing, RDMA errors.
-**Retention:** Unlimited (`--storage.tsdb.retention.time=0d`). Data: `~/.local/share/prometheus` (~0.6 GB/day).
+**Retention:** `--storage.tsdb.retention.time=0d` was believed to be unlimited but means "not set" = 15 days; everything older was deleted until Oct 2 2026, when the NAS instance was set to `100y`. `~/.local/share/prometheus` is the FROZEN old local database (Jul 12-27; never start Prometheus on it).
 
 **RDMA panel:** Uses `node_infiniband_port_data_*` (RDMA verbs counters), not `node_network_*` (Ethernet). Dual-rail aggregate per node.
 
