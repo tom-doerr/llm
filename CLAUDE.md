@@ -825,7 +825,10 @@ use int64. **Proven by A/B on this box:** 65536 + default fusions = crash; 65536
 fusion lost); 32768 + both fusions = starts and serves (KV 33.6 GiB). So the ceiling is
 per-model — any model with 2×intermediate ≥ 32768 crosses it at 65536 tokens. 32768 chosen
 = keeps both fusions AND the larger KV, and matches the Spark-community Qwen3.8 recipe;
-61440 would also be safe but leaves no margin. **FILED upstream: https://github.com/vllm-project/vllm/issues/53390** (write-up
+61440 would also be safe but leaves no margin. **FILED upstream: https://github.com/vllm-project/vllm/issues/53390;
+FIXED there by PR #53409 (merged Aug 28 2026, first release v0.29.0). The `vllm-node-aug` image
+(0.26.1rc1.dev1105 of Aug 22, what spark-2 serves, read back Oct 2) predates the fix, so the ceiling
+holds for dense models until that image is rebuilt from ≥ v0.29.0** (write-up
 `~/llm/upstream-report-fused-silu-mul-int32.md`, standalone repro
 `~/llm/repro_int32_silu_mul_block_quant.py` — boundary confirmed on hardware: 61,681
 tokens OK, 61,682 = illegal access; a faulting kernel in a separate CUDA context does
