@@ -7,7 +7,9 @@
 # Direct:    http://192.168.110.2:8000/v1  (RDMA link, host-management tools only)
 # Usage: ./deploy-qwen3.6-35b-a3b-fp8.sh [stop|--no-build]
 #   (the KV_NVME variants live in deploy-qwen3.8-27b-fp8.sh)
-#   GPU_MEM=...   -> override --gpu-memory-utilization (default 0.70; user call Aug 28).
+#   GPU_MEM=...   -> override --gpu-memory-utilization (default 0.55 since Oct 17 2026: user call,
+#            makes room for the idea-rank FLUX renderer on spark-2:8910, ~23 GiB GPU + ~6 GiB RSS
+#            at 2048x2048; 0.60 would have left ~6 GiB MemAvailable; was 0.70 from Aug 28).
 #            0.85 hard-froze spark-2 historically; watch MemAvailable under load.
 #   EXTRA_VLLM_ARGS='...' -> appended to the vllm serve command (vLLM takes the LAST
 #            value of a repeated flag, so e.g. '--max-num-batched-tokens 32768' overrides the recipe)
@@ -15,7 +17,7 @@ set -e
 cd "$(dirname "$0")"
 REMOTE_REPO=/home/tom/spark-vllm-docker-aug   # fresh upstream clone (Aug 2026), NOT ~/spark-vllm-docker
 RECIPE=qwen3.6-35b-a3b-fp8      # upstream recipe, ships with the clone
-GPU_MEM="${GPU_MEM:-0.70}"
+GPU_MEM="${GPU_MEM:-0.55}"
 
 if [ "${1:-}" = "stop" ]; then
     ssh spark-2 'docker rm -f vllm_node 2>/dev/null' || true
@@ -48,7 +50,8 @@ if [ "${KV_NVME:-0}" = 1 ]; then
     ssh spark-2 'mkdir -p ~/.cache/vllm/kv_nvme'
 fi
 
-# Solo, TP=1, gpu-mem 0.70: ~35 GiB weights leaves ~37 GiB of KV (about 3.69M tokens).
+# Solo, TP=1, gpu-mem 0.55: ~35 GiB weights leaves ~19 GiB of KV (0.70 gave 37.3 GiB =
+# 3.71M tokens; Oct 10-17 usage of that: p99 65 %, max 86 %, no preemptions).
 # 65536 batched tokens is safe for this
 # MoE (its per-expert intermediate is small, so the int32 overflow of vllm#53390 —
 # which caps the dense 27B at 32768 — cannot trigger here).

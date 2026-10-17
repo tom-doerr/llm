@@ -773,7 +773,12 @@ Peak: **211 dec/s** at c=32. c=1 slow due to pipeline bubble. Stability: passed 
 ## Qwen3.6-35B-A3B-FP8 on the Aug-2026 stack — CURRENT on spark-2 (since Aug 23 2026)
 
 **Status: RUNNING single-node (solo, TP=1), `http://spark-2:8000/v1`, model id
-`Qwen/Qwen3.6-35B-A3B-FP8`.** Switched BACK from Qwen3.8-27B on Aug 23 (user call) after
+`Qwen/Qwen3.6-35B-A3B-FP8`.** **gpu-mem 0.55 since Oct 17 2026 20:27Z** (user call: spark-2 also runs the
+idea-rank FLUX renderer on :8910, ~23 GiB GPU at 2048²). At 0.55: KV 19.89 GiB = 1,976,009 tokens (7.54x @262K);
+the engine holds 73 GiB GPU under load (6 GiB above 0.55 x 121.7, before at 0.70: 91.3 GiB) + ~8 GiB host RSS;
+spark-2 MemAvailable 7.3-7.7 GiB. 0.70 (Aug 28 - Oct 17) gave KV 37.33 GiB = 3.71M tokens, used Oct 10-17 at
+p99 65 % / max 86 %, 0 preemptions. Stop BOTH the renderer and vLLM before raising it again.
+Switched BACK from Qwen3.8-27B on Aug 23 (user call) after
 the measured comparison below: the dense 27B was 3.4x slower per token and completed 46%
 fewer requests/hour on the same workload.
 **Deploy: `~/llm/deploy-qwen3.6-35b-a3b-fp8.sh` (= `deploy.sh`, the watchdog target).**
