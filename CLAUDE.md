@@ -1137,8 +1137,8 @@ Referenced from live `~/.config/prometheus/prometheus.yml` `rule_files:`. Visibl
 Prometheus Alerts tab + dashboard panel 7 (firing-alert count). **Push:** `nas-alert-bridge`
 (systemd --user on spark-1, polls firing alerts every 60s) → self-hosted **ntfy**
 (Docker `ntfy` on spark-1 `:8090`, topic `nas-alerts`, 24h cache). Subscribe in the ntfy
-app: server `http://spark-1.tail620cfa.ts.net:8090`, topic `nas-alerts`. Bridge + unit:
-`~/llm/nas-alert-bridge{,.service}` (unit symlinked to `~/.config/systemd/user/`).
+app: server `http://spark-1.tail620cfa.ts.net:8090`, topic `nas-alerts`. Bridge + unit: moved to a
+private infra repo on Oct 28 2026 (unit still symlinked into `~/.config/systemd/user/`).
 
 ## Notes
 
